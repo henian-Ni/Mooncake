@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 namespace mooncake::test {
 
 // ============================================================================
-// MockDistributedKVClient - 用于测试 DistributedKVStorageBackend
+// MockDistributedKVClient - used to test DistributedKVStorageBackend
 // ============================================================================
 class MockDistributedKVClient : public IDistributedKVClient {
    public:
@@ -80,7 +80,7 @@ class MockDistributedKVClient : public IDistributedKVClient {
         return ErrorCode::OK;
     }
 
-    // 辅助方法
+    // Helper methods.
     void SetInitResult(ErrorCode code) { init_result_ = code; }
     void SetBatchPutResult(ErrorCode code) { batch_put_result_ = code; }
     void SetBatchGetResult(ErrorCode code) { batch_get_result_ = code; }
@@ -2793,7 +2793,7 @@ TEST_F(StorageBackendTest, AdaptorBatchOffload_EvictionHandlerCalled) {
 }
 
 // ============================================================================
-// DistributedKVStorageBackend Tests (统一使用 StorageBackendTest)
+// DistributedKVStorageBackend Tests (uses StorageBackendTest throughout)
 // ============================================================================
 
 TEST_F(StorageBackendTest, DistributedKVStorageBackend_Init_Success) {

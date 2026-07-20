@@ -1223,35 +1223,38 @@ class OffsetAllocatorStorageBackend : public StorageBackendInterface {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IDistributedKVClient — 用户实现的分布式 KV 后端接口
+// IDistributedKVClient — user-implemented distributed KV backend interface
 // ─────────────────────────────────────────────────────────────────────────────
 class IDistributedKVClient {
    public:
     virtual ~IDistributedKVClient() = default;
 
-    // 初始化连接
+    // Initialize the connection.
     virtual ErrorCode Init() = 0;
 
-    // 批量写入：keys[i] 对应 values[i]（已拼接好的字节串）
+    // Batch write: keys[i] corresponds to values[i] (an
+    // already-concatenated byte string).
     virtual tl::expected<std::vector<int>, ErrorCode> BatchPut(const std::vector<std::string>& keys,
                                const std::vector<std::string>& values) = 0;
 
-    // 批量读取：将 key 对应的数据读入 dest_slices[key].ptr
-    // dest_slices[key].size 是预分配的缓冲区大小，必须与实际数据大小匹配
+    // Batch read: read the data for each key into dest_slices[key].ptr.
+    // dest_slices[key].size is the pre-allocated buffer size and must
+    // match the actual data size.
     virtual ErrorCode BatchGet(
         const std::vector<std::string>& keys,
         std::unordered_map<std::string, Slice>& dest_slices) = 0;
 
-    // 检查 key 是否存在
+    // Check whether the key exists.
     virtual tl::expected<bool, ErrorCode> Exists(const std::string& key) = 0;
 
-    // 扫描所有 key，用于进程重启后恢复 master 元数据（ScanMeta）
+    // Scan all keys; used to restore master metadata after a process
+    // restart (ScanMeta).
     virtual ErrorCode ScanKeys(
         const std::function<ErrorCode(const std::string& key,
                                       int64_t value_size)>& handler) = 0;
 };
 
-// 实现 IDistributedKVClient（封装KVC接口）
+// Implements IDistributedKVClient (wrapping the KVC interface).
 class UbsKVClient : public IDistributedKVClient {
 public:
     ErrorCode Init() override;
@@ -1266,7 +1269,8 @@ public:
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DistributedKVStorageBackend — StorageBackendInterface 的分布式 KV 实现
+// DistributedKVStorageBackend — distributed KV implementation of
+// StorageBackendInterface.
 // ─────────────────────────────────────────────────────────────────────────────
 class DistributedKVStorageBackend : public StorageBackendInterface {
    public:
@@ -1294,7 +1298,7 @@ tl::expected<void, ErrorCode> ScanMeta(
             const std::vector<std::string>& keys,
             std::vector<StorageObjectMetadata>& metadatas)>& handler) override;
 
-    // 测试用 friend 声明
+    // Test-only friend declaration.
     friend class StorageBackendTest;
 
    private:

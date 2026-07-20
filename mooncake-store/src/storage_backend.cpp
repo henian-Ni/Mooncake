@@ -3311,10 +3311,13 @@ tl::expected<void, ErrorCode> DistributedKVStorageBackend::Init() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BatchOffload: heartbeat 线程调用，将内存数据写入分布式 KV 后端
-// batch_object: {key → vector<Slice>}，Slice.ptr 已是 CPU 内存（FileStorage
-//               在调用前完成了 GPU→CPU D2H 拷贝）
-// complete_handler: 写成功后必须调用，通知 master 添加 LOCAL_DISK 副本
+// BatchOffload: called by the heartbeat thread to write in-memory data to the
+//               distributed KV backend.
+// batch_object: {key -> vector<Slice>}; Slice.ptr is already CPU
+//               memory (FileStorage performs the GPU->CPU D2H copy before this
+//               call).
+// complete_handler: must be called on success to notify the master to add a
+//                   LOCAL_DISK replica.
 // ─────────────────────────────────────────────────────────────────────────────
 
 tl::expected<int64_t, ErrorCode> DistributedKVStorageBackend::BatchOffload(
@@ -3351,7 +3354,7 @@ tl::expected<int64_t, ErrorCode> DistributedKVStorageBackend::BatchOffload(
     for (const auto& [key, slices] : batch_object) {
         if (slices.empty()) continue;
 
-// 将多个 Slice 拼接为一个连续字节串
+// Concatenate multiple Slices into one contiguous byte string.
         int64_t key_size = static_cast<int64_t>(key.size());
         int64_t value_size = 0;
         for (const auto& s : slices) value_size += static_cast<int64_t>(s.size);
@@ -3363,13 +3366,14 @@ tl::expected<int64_t, ErrorCode> DistributedKVStorageBackend::BatchOffload(
 
         put_keys.push_back(key);
         put_values.push_back(std::move(value));
-        // transport_endpoint 留空，由 FileStorage::complete_handler 填充
+        // transport_endpoint is left empty; filled by
+        // FileStorage::complete_handler.
         metadatas.push_back(StorageObjectMetadata{
-            0,                                 // bucket_id: 不使用
-            0,                                 // offset: 不使用
-            key_size,                          // key_size (保存移动前的size)
-            value_size,                        // data_size: 必须正确填写
-            ""                                 // transport_endpoint: 框架填充
+            0,          // bucket_id: unused
+            0,          // offset: unused
+            key_size,   // key_size (saved before move)
+            value_size, // data_size: must be correct
+            ""          // transport_endpoint: filled later
         });
     }
 
@@ -3399,12 +3403,13 @@ tl::expected<int64_t, ErrorCode> DistributedKVStorageBackend::BatchOffload(
     }
 
 
-    // 更新容量计数器
+    // Update capacity counters.
     total_keys_.fetch_add(static_cast<int64_t>(success_keys.size()),
                           std::memory_order_relaxed);
 
-    // 通知 master 添加 LOCAL_DISK 副本
-    // FileStorage 的 complete_handler 会将 transport_endpoint 填为 local_rpc_addr_
+    // Notify the master to add a LOCAL_DISK replica.
+    // FileStorage's complete_handler fills transport_endpoint with
+    // local_rpc_addr_.
     if (!complete_handler) {
         LOG(ERROR) << "complete_handler is nullptr";
         return tl::make_unexpected(ErrorCode::INTERNAL_ERROR);
@@ -3424,9 +3429,11 @@ tl::expected<int64_t, ErrorCode> DistributedKVStorageBackend::BatchOffload(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BatchLoad: 对端 FileStorage::BatchGet 调用，将数据读入 CPU ClientBuffer
-// batched_slices: {key → Slice}，Slice.ptr 是 RDMA 注册的 CPU ClientBuffer 地址
-//                 后续由 TransferEngine RDMA pull 到请求方 GPU
+// BatchLoad: called by the peer's FileStorage::BatchGet to read data into a
+//            CPU ClientBuffer.
+// batched_slices: {key -> Slice}; Slice.ptr is an RDMA-registered CPU
+//                 ClientBuffer address; the TransferEngine later RDMA-pulls it
+//                 to the requesting GPU.
 // ─────────────────────────────────────────────────────────────────────────────
 
 tl::expected<void, ErrorCode> DistributedKVStorageBackend::BatchLoad(
@@ -3471,8 +3478,9 @@ tl::expected<bool, ErrorCode> DistributedKVStorageBackend::IsEnableOffloading() 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ScanMeta: FileStorage::Init() 调用，进程重启后扫描 KV 后端已有数据，
-//           通过 handler 回调通知 master 恢复 LOCAL_DISK 副本元数据
+// ScanMeta: called by FileStorage::Init() after a process restart to scan
+//           existing data in the KV backend and, via the handler callback,
+//           notify the master to restore LOCAL_DISK replica metadata.
 // ─────────────────────────────────────────────────────────────────────────────
 
 tl::expected<void, ErrorCode> DistributedKVStorageBackend::ScanMeta(
@@ -3505,7 +3513,7 @@ tl::expected<void, ErrorCode> DistributedKVStorageBackend::ScanMeta(
                 0, 0,
                 static_cast<int64_t>(key.size()),
                 value_size,
-                ""  // transport_endpoint 由 FileStorage::Init 的 ScanMeta handler 填充
+                ""  // transport_endpoint: filled by the ScanMeta handler.
             });
             total_keys_.fetch_add(1, std::memory_order_relaxed);
             total_size_.fetch_add(value_size, std::memory_order_relaxed);
