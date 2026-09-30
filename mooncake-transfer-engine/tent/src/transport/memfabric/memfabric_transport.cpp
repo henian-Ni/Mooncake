@@ -58,7 +58,7 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     if (!config_.data_op_type.has_value()) {
         LOG(ERROR) << "Invalid MF_DATA_OP_TYPE: " << config_.data_op_type_str;
         return Status::InvalidArgument(
-            "Invalid MF_DATA_OP_TYPE: " + config_.data_op_type_str LOC_MARK);
+            "Invalid MF_DATA_OP_TYPE: " + config_.data_op_type_str + LOC_MARK);
     }
 
     const char* log_level = std::getenv("MF_LOG_LEVEL");

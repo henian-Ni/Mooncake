@@ -28,6 +28,7 @@ struct MemFabricTask {
     volatile TransferStatusEnum status_word = TransferStatusEnum::PENDING;
     uint64_t batch_id = 0;
     size_t length = 0;
+    size_t transferred_bytes = 0;
 };
 
 struct MemFabricSubBatch : public Transport::SubBatch {

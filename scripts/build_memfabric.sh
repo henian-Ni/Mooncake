@@ -63,7 +63,7 @@ cmake -S . -B "$BUILD_DIR" -G Ninja \
     -DBUILD_UNIT_TESTS=OFF \
     -DCMAKE_BUILD_TYPE=Release
 
-cmake --build "$BUILD_DIR" -j "$JOBS"
+cmake --build "$BUILD_DIR" -j 255
 sudo cmake --install "$BUILD_DIR"
 print_success "Build + install complete"
 

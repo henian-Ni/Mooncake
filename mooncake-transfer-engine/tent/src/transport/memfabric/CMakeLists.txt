@@ -1,5 +1,5 @@
 if(USE_MEMFABRIC)
-  add_library(tent_xport_memfabric OBJECT
+  add_library(tent_xport_memfabric STATIC
     memfabric_transport.cpp
     memfabric_under_api.cpp)
   target_link_libraries(tent_xport_memfabric PUBLIC tent_interface dl ascendcl)
