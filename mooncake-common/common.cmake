@@ -125,6 +125,7 @@ option(
   OFF)
 option(USE_VRAM_SEGMENT "option for vram segment" OFF)
 option(USE_MPCOMM "option for using MPComm transport in TENT" OFF)
+option(USE_MEMFABRIC "option for using memfabric transport (dlopen libmf_smem.so)" OFF)
 
 if(USE_UB)
   add_compile_definitions(USE_UB)
@@ -605,6 +606,11 @@ endif()
 
 if(USE_TCP)
   add_compile_definitions(USE_TCP)
+endif()
+
+if(USE_MEMFABRIC)
+  add_compile_definitions(USE_MEMFABRIC)
+  message(STATUS "memfabric transport is enabled (dlopen libmf_smem.so)")
 endif()
 
 if(USE_BAREX)

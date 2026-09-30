@@ -58,6 +58,7 @@ enum TransportType : int {
     UB,
     MPCOMM,
     HP_TCP,
+    MEMFABRIC,
     // Sentinel: must remain the last enumerator.
     kNumTransportTypes,
 };
@@ -99,6 +100,8 @@ inline const char* transportTypeName(TransportType type) {
             return "mpcomm";
         case HP_TCP:
             return "hp_tcp";
+        case MEMFABRIC:
+            return "memfabric";
         case kNumTransportTypes:
             return "unknown";
     }
@@ -120,6 +123,7 @@ inline TransportType parseTransportType(const std::string& str) {
     if (str == "ub") return UB;
     if (str == "mpcomm") return MPCOMM;
     if (str == "hp_tcp") return HP_TCP;
+    if (str == "memfabric") return MEMFABRIC;
     return UNSPEC;
 }
 

@@ -54,6 +54,10 @@
 #include "tent/transport/mpcomm/mpcomm_transport.h"
 #endif
 
+#ifdef USE_MEMFABRIC
+#include "tent/transport/memfabric/memfabric_transport.h"
+#endif
+
 namespace mooncake {
 namespace tent {
 
@@ -127,6 +131,11 @@ Status TransferEngineImpl::loadTransports() {
 #ifdef USE_MPCOMM
     if (conf_->get("transports/mpcomm/enable", true))
         transport_list_[MPCOMM] = std::make_shared<MpcommTransport>();
+#endif
+
+#ifdef USE_MEMFABRIC
+    if (conf_->get("transports/memfabric/enable", false))
+        transport_list_[MEMFABRIC] = std::make_shared<MemFabricTransport>();
 #endif
 
     return Status::OK();
