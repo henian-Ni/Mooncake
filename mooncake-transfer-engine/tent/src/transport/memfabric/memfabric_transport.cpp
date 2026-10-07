@@ -26,11 +26,16 @@ std::atomic<int> MemFabricTransport::g_init_ref_{0};
 std::mutex MemFabricTransport::g_init_mutex_;
 
 MemFabricSubBatch::~MemFabricSubBatch() {
+    size_t pending = 0;
     for (auto& task : task_list) {
         if (task.status_word == TransferStatusEnum::PENDING && handle) {
+            ++pending;
             MemFabricUnderApi::SmemTransBatchStatusQuery(handle, task.batch_id, 0);
         }
     }
+    if (!task_list.empty())
+        LOG(INFO) << "~MemFabricSubBatch: tasks=" << task_list.size()
+                  << ", pending_cleaned=" << pending;
 }
 
 MemFabricTransport::MemFabricTransport() = default;
@@ -40,10 +45,13 @@ Status MemFabricTransport::install(std::string& local_segment_name,
                                    std::shared_ptr<ControlService> metadata,
                                    std::shared_ptr<Topology> local_topology,
                                    std::shared_ptr<Config> conf) {
+    LOG(INFO) << "install: segment_name=" << local_segment_name;
+
     if (!MemFabricUnderApi::LoadLibrary()) {
         LOG(ERROR) << "MemFabricUnderApi::LoadLibrary failed, libmf_smem.so unavailable";
         return Status::DeviceNotFound("libmf_smem.so unavailable" LOC_MARK);
     }
+    LOG(INFO) << "LoadLibrary: ok";
 
     local_segment_name_ = local_segment_name;
     metadata_ = metadata;
@@ -60,6 +68,7 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         return Status::InvalidArgument(
             "Invalid MF_DATA_OP_TYPE: " + config_.data_op_type_str + LOC_MARK);
     }
+    LOG(INFO) << "MF_DATA_OP_TYPE=" << config_.data_op_type_str;
 
     const char* log_level = std::getenv("MF_LOG_LEVEL");
     if (log_level) MemFabricUnderApi::SmemSetLogLevel(std::atoi(log_level));
@@ -70,10 +79,13 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         return Status::InternalError(
             "aclrtGetDevice failed, device may be not set" LOC_MARK);
     }
+    LOG(INFO) << "aclrtGetDevice: device_id=" << device_id;
+
     {
         std::lock_guard<std::mutex> lock(g_init_mutex_);
         if (g_init_ref_.fetch_add(1) == 0) {
             auto ret = MemFabricUnderApi::SmemTransInit(device_id, 0);
+            LOG(INFO) << "smem_trans_init: ret=" << ret << ", ref=" << g_init_ref_.load();
             if (ret != 0) {
                 LOG(ERROR) << "smem_trans_init failed, ret=" << ret;
                 g_init_ref_.fetch_sub(1);
@@ -103,8 +115,12 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         }
         std::snprintf(cfg.url, sizeof(cfg.url), "%s:0", host_ip);
     }
+    LOG(INFO) << "trans config: url=" << cfg.url
+              << ", deviceId=" << cfg.deviceId
+              << ", dataOpType=" << config_.data_op_type_str;
 
     handle_ = MemFabricUnderApi::SmemTransCreate(&cfg, 0);
+    LOG(INFO) << "smem_trans_create: handle=" << handle_;
     if (!handle_) {
         LOG(ERROR) << "smem_trans_create returned null handle";
         std::lock_guard<std::mutex> lock(g_init_mutex_);
@@ -124,6 +140,8 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         char url_buf[64];
         std::snprintf(url_buf, sizeof(url_buf), "%s:%u", host_ip, actual_port);
         config_.store_url = url_buf;
+        LOG(INFO) << "smem_trans_get_rpc_port: port=" << actual_port
+                  << ", store_url=" << config_.store_url;
     } else {
         LOG(ERROR) << "smem_trans_get_rpc_port failed";
         MemFabricUnderApi::SmemTransDestroy(handle_, 0);
@@ -155,6 +173,7 @@ Status MemFabricTransport::install(std::string& local_segment_name,
 }
 
 Status MemFabricTransport::publishLocalDevices() {
+    LOG(INFO) << "publishLocalDevices: store_url=" << config_.store_url;
     if (!metadata_) {
         LOG(ERROR) << "metadata is null in publishLocalDevices";
         return Status::InvalidArgument("metadata is null" LOC_MARK);
@@ -191,11 +210,14 @@ Status MemFabricTransport::resolveDestUrl(const Request& request,
                     "memfabric_unique_id missing for segment" LOC_MARK);
             }
             dest_url = it->second;
+            LOG(INFO) << "resolveDestUrl: target_id=" << request.target_id
+                      << ", dest_url=" << dest_url;
             return Status::OK();
         });
 }
 
 Status MemFabricTransport::allocateSubBatch(SubBatchRef& batch, size_t max_size) {
+    LOG(INFO) << "allocateSubBatch: max_size=" << max_size;
     auto* mf_batch = new MemFabricSubBatch();
     mf_batch->handle = handle_;
     mf_batch->task_list.reserve(max_size);
@@ -209,6 +231,7 @@ Status MemFabricTransport::freeSubBatch(SubBatchRef& batch) {
         LOG(ERROR) << "Invalid sub-batch type in freeSubBatch";
         return Status::InvalidArgument("invalid sub-batch" LOC_MARK);
     }
+    LOG(INFO) << "freeSubBatch: task_count=" << mf_batch->task_list.size();
     delete mf_batch;
     batch = nullptr;
     return Status::OK();
@@ -216,6 +239,7 @@ Status MemFabricTransport::freeSubBatch(SubBatchRef& batch) {
 
 Status MemFabricTransport::submitTransferTasks(
     SubBatchRef batch, const std::vector<Request>& request_list) {
+    LOG(INFO) << "submitTransferTasks: request_count=" << request_list.size();
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch) {
         LOG(ERROR) << "Invalid sub-batch type in submitTransferTasks";
@@ -234,6 +258,7 @@ Status MemFabricTransport::submitTransferTasks(
     for (size_t i = 0; i < request_list.size(); ++i) {
         groups[dest_urls[i]].push_back(i);
     }
+    LOG(INFO) << "submitTransferTasks: grouped into " << groups.size() << " dest(s)";
 
     for (auto& [dest_url, indices] : groups) {
         const uint32_t batch_size = static_cast<uint32_t>(indices.size());
@@ -260,6 +285,10 @@ Status MemFabricTransport::submitTransferTasks(
         params.stream = nullptr;
         params.flags = 0;
 
+        LOG(INFO) << "batch_copy: dest_url=" << dest_url
+                  << ", batch_size=" << batch_size
+                  << ", opcode=" << (is_write ? "WRITE" : "READ");
+
         uint64_t batch_id = 0;
         auto ret = MemFabricUnderApi::SmemTransBatchCopy(handle_, &params, &batch_id);
         if (ret != 0) {
@@ -273,6 +302,9 @@ Status MemFabricTransport::submitTransferTasks(
             continue;
         }
 
+        LOG(INFO) << "batch_copy submitted: batch_id=" << batch_id
+                  << ", count=" << indices.size();
+
         for (size_t idx : indices) {
             auto& task = mf_batch->task_list[start + idx];
             task.request = request_list[idx];
@@ -282,11 +314,13 @@ Status MemFabricTransport::submitTransferTasks(
         }
     }
 
+    LOG(INFO) << "submitTransferTasks done: " << request_list.size() << " tasks";
     return Status::OK();
 }
 
 Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
                                              TransferStatus& status) {
+    LOG(INFO) << "getTransferStatus: task_id=" << task_id;
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch || task_id < 0 ||
         task_id >= static_cast<int>(mf_batch->task_list.size())) {
@@ -301,6 +335,10 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
     }
 
     auto ret = MemFabricUnderApi::SmemTransBatchStatusQuery(handle_, task.batch_id, 0);
+    LOG(INFO) << "batch_status_query: batch_id=" << task.batch_id
+              << ", ret=" << ret
+              << (ret == SMEM_TRANS_BATCH_DONE ? " (DONE)" :
+                  ret == SMEM_TRANS_BATCH_PENDING ? " (PENDING)" : " (FAILED)");
     if (ret == SMEM_TRANS_BATCH_DONE) {
         task.status_word = TransferStatusEnum::COMPLETED;
         task.transferred_bytes = task.length;
@@ -319,6 +357,7 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
 Status MemFabricTransport::addMemoryBuffer(BufferDesc& desc,
                                            const MemoryOptions& options) {
     (void)options;
+    LOG(INFO) << "addMemoryBuffer: addr=" << desc.addr << ", length=" << desc.length;
     if (!handle_) {
         LOG(ERROR) << "addMemoryBuffer called before install";
         return Status::InternalError("not installed" LOC_MARK);
@@ -331,6 +370,7 @@ Status MemFabricTransport::addMemoryBuffer(BufferDesc& desc,
     }
     desc.transports.push_back(MEMFABRIC);
     desc.transport_attrs[MEMFABRIC] = "";
+    LOG(INFO) << "register_mem: ok, addr=" << desc.addr;
     return Status::OK();
 }
 
@@ -344,21 +384,25 @@ Status MemFabricTransport::addMemoryBuffer(std::vector<BufferDesc>& desc_list,
 
 Status MemFabricTransport::removeMemoryBuffer(BufferDesc& desc) {
     if (!handle_) return Status::OK();
+    LOG(INFO) << "removeMemoryBuffer: addr=" << desc.addr;
     (void)MemFabricUnderApi::SmemTransDeregisterMem(handle_, reinterpret_cast<void*>(desc.addr));
     return Status::OK();
 }
 
 Status MemFabricTransport::uninstall() {
     if (!installed_) return Status::OK();
+    LOG(INFO) << "uninstall: handle=" << handle_;
     if (handle_) {
         MemFabricUnderApi::SmemTransDestroy(handle_, 0);
         handle_ = nullptr;
+        LOG(INFO) << "smem_trans_destroy: done";
     }
     {
         std::lock_guard<std::mutex> lock(g_init_mutex_);
         if (g_init_ref_.fetch_sub(1) == 1) {
             MemFabricUnderApi::SmemTransUninit(0);
             MemFabricUnderApi::CleanupLibrary();
+            LOG(INFO) << "smem_trans_uninit + cleanup_library: ref=0";
         }
     }
     installed_ = false;
