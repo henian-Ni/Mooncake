@@ -49,7 +49,7 @@
 #ifdef USE_NOF
 #include "spdk/spdk_wrapper.h"
 #endif
-#ifdef USE_ASCEND_DIRECT
+#if defined(USE_ASCEND_DIRECT) || defined(USE_MEMFABRIC)
 #include "acl/acl_rt.h"
 #include "transport/ascend_transport/ascend_direct_transport/context_manager.h"
 #endif
@@ -59,7 +59,7 @@
 #ifdef USE_INTRA_NVLINK
 #include "gpu_vendor/intra_nvlink.h"
 #endif
-#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM)
+#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM) || defined(USE_MEMFABRIC)
 #include "ascend_allocator.h"
 #endif
 
@@ -94,7 +94,7 @@ bool IsHostStoreSegmentProtocol(const std::string &protocol) {
            protocol == "efa" || protocol == "cxi" || protocol == "rpc_only";
 }
 
-#ifdef USE_ASCEND_DIRECT
+#if defined(USE_ASCEND_DIRECT) || defined(USE_MEMFABRIC)
 // Split standalone store capacity across NPUs: cap each mount at total/n.
 size_t AgentModeStoreChunkCap(size_t total_size) {
     const uint32_t n = ContextManager::getInstance().getDeviceCount();
@@ -1030,7 +1030,7 @@ tl::expected<void, ErrorCode> RealClient::setup_internal(
                 ptr = allocate_buffer_numa_segments(mapped_size, seg_numa_nodes,
                                                     page_sz);
                 seg_location = buildSegmentsLocation(page_sz, seg_numa_nodes);
-#ifdef USE_ASCEND_DIRECT
+#if defined(USE_ASCEND_DIRECT) || defined(USE_MEMFABRIC)
             } else if (protocol == "ascend" || protocol == "ubshmem") {
                 ptr = AllocateAscendStoreSegment(
                     segment_size, this->protocol, use_hugepage_,

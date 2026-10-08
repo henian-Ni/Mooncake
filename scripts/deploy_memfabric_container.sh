@@ -32,6 +32,10 @@ cp "$BUILD/mooncake-transfer-engine/tent/src/metrics/libtent_metrics.so" "$STAGI
 cp "$BUILD/mooncake-transfer-engine/tent/src/python/tent.cpython-312-aarch64-linux-gnu.so" "$STAGING/"
 cp "$BUILD/mooncake-store/src/libmooncake_store.so" "$STAGING/" 2>/dev/null || true
 
+# Binaries (mooncake_master, mooncake_client)
+cp "$BUILD/mooncake-store/src/mooncake_master" "$STAGING/" 2>/dev/null || true
+cp "$BUILD/mooncake-store/src/mooncake_client" "$STAGING/" 2>/dev/null || true
+
 print_success "Staged $(ls "$STAGING" | wc -l) files"
 
 print_section "Replacing mooncake packages"

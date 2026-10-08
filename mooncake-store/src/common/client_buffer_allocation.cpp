@@ -95,7 +95,7 @@ void *allocate_buffer_allocator_memory(size_t total_size,
         LOG(ERROR) << "Total size must be at least " << alignment;
         return nullptr;
     }
-#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM)
+#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM) || defined(USE_MEMFABRIC)
     if (protocol == "ascend" || protocol == "ubshmem") {
         return ascend_allocate_memory(total_size, protocol);
     }
@@ -131,7 +131,7 @@ void *allocate_buffer_allocator_memory(size_t total_size,
 }
 
 void free_memory(const std::string &protocol, void *ptr, bool use_spdk_dma) {
-#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM)
+#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM) || defined(USE_MEMFABRIC)
     if (protocol == "ascend" || protocol == "ubshmem") {
         return ascend_free_memory(protocol, ptr);
     }
