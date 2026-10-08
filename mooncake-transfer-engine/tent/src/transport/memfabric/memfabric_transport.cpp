@@ -210,8 +210,6 @@ Status MemFabricTransport::resolveDestUrl(const Request& request,
                     "memfabric_unique_id missing for segment" LOC_MARK);
             }
             dest_url = it->second;
-            LOG(INFO) << "resolveDestUrl: target_id=" << request.target_id
-                      << ", dest_url=" << dest_url;
             return Status::OK();
         });
 }

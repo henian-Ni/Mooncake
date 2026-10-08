@@ -9,7 +9,9 @@
 #include "config.h"
 #include "acl/acl.h"
 #include "transport/ascend_transport/ascend_direct_transport/adxl_compat.h"
+#ifdef USE_ASCEND_DIRECT
 #include "transport/ascend_transport/ascend_direct_transport/context_manager.h"
+#endif
 
 namespace mooncake {
 namespace {
@@ -24,6 +26,7 @@ bool BindNextAgentDevice() {
     if (!globalConfig().ascend_agent_mode) {
         return true;
     }
+#ifdef USE_ASCEND_DIRECT
     auto &mgr = ContextManager::getInstance();
     if (!mgr.isInitialized()) {
         return true;
@@ -38,6 +41,7 @@ bool BindNextAgentDevice() {
                    << idx;
         return false;
     }
+#endif
     return true;
 }
 
@@ -45,9 +49,11 @@ void CommitAgentDeviceSlot() {
     if (!globalConfig().ascend_agent_mode) {
         return;
     }
+#ifdef USE_ASCEND_DIRECT
     if (!ContextManager::getInstance().isInitialized()) {
         return;
     }
+#endif
     g_agent_alloc_next.fetch_add(1, std::memory_order_relaxed);
 }
 

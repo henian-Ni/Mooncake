@@ -51,6 +51,8 @@
 #endif
 #if defined(USE_ASCEND_DIRECT) || defined(USE_MEMFABRIC)
 #include "acl/acl_rt.h"
+#endif
+#ifdef USE_ASCEND_DIRECT
 #include "transport/ascend_transport/ascend_direct_transport/context_manager.h"
 #endif
 #ifdef USE_CUDA
@@ -94,7 +96,7 @@ bool IsHostStoreSegmentProtocol(const std::string &protocol) {
            protocol == "efa" || protocol == "cxi" || protocol == "rpc_only";
 }
 
-#if defined(USE_ASCEND_DIRECT) || defined(USE_MEMFABRIC)
+#ifdef USE_ASCEND_DIRECT
 // Split standalone store capacity across NPUs: cap each mount at total/n.
 size_t AgentModeStoreChunkCap(size_t total_size) {
     const uint32_t n = ContextManager::getInstance().getDeviceCount();
@@ -111,7 +113,9 @@ bool RestoreAgentModeDeviceZero() {
     }
     return true;
 }
+#endif
 
+#if defined(USE_ASCEND_DIRECT) || defined(USE_MEMFABRIC)
 void *AllocateAscendStoreSegment(size_t segment_size,
                                  const std::string &protocol, bool use_hugepage,
                                  bool defer_hugetlb, size_t *mapped_size) {

@@ -210,6 +210,8 @@ if(USE_TENT)
 endif()
 
 if(USE_MEMFABRIC)
+  target_sources(transfer_engine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/transport/ascend_transport/ascend_allocator.cpp)
   target_link_libraries(transfer_engine PUBLIC ascendcl)
 endif()
 

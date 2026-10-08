@@ -13,7 +13,7 @@
 #ifdef USE_INTRA_NVLINK
 #include "gpu_vendor/intra_nvlink.h"
 #endif
-#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM)
+#if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM) || defined(USE_MEMFABRIC)
 #include "ascend_allocator.h"
 #endif
 #if defined(USE_SUNRISE)
