@@ -114,8 +114,14 @@ Status MemFabricTransport::install(std::string& local_segment_name,
             host_ip[len] = '\0';
         }
         std::snprintf(cfg.url, sizeof(cfg.url), "%s:0", host_ip);
+        if (config_.data_op_type.value() & SMEMB_DATA_OP_DEVICE_RDMA) {
+            std::snprintf(cfg.nic, sizeof(cfg.nic), "tcp://%s",
+                          local_segment_name.c_str());
+            LOG(INFO) << "RDMA mode: nic=" << cfg.nic;
+        }
     }
     LOG(INFO) << "trans config: url=" << cfg.url
+              << ", nic=" << cfg.nic
               << ", deviceId=" << cfg.deviceId
               << ", dataOpType=" << config_.data_op_type_str;
 

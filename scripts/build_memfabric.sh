@@ -64,7 +64,7 @@ cmake -S . -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release
 
 cmake --build "$BUILD_DIR" -j 255
-sudo cmake --install "$BUILD_DIR"
+cmake --install "$BUILD_DIR"
 print_success "Build + install complete"
 
 # 5. Python package files
