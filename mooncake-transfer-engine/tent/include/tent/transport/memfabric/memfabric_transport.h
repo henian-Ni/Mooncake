@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "memfabric_types.h"
@@ -34,6 +35,7 @@ struct MemFabricTask {
 struct MemFabricSubBatch : public Transport::SubBatch {
     std::vector<MemFabricTask> task_list;
     smem_trans_t handle = nullptr;
+    std::unordered_map<uint64_t, TransferStatusEnum> batch_status_cache;
     size_t size() const override { return task_list.size(); }
     ~MemFabricSubBatch() override;
 };

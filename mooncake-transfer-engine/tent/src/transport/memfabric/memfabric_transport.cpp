@@ -323,8 +323,7 @@ Status MemFabricTransport::submitTransferTasks(
 }
 
 Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
-                                             TransferStatus& status) {
-    LOG(INFO) << "getTransferStatus: task_id=" << task_id;
+                                              TransferStatus& status) {
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch || task_id < 0 ||
         task_id >= static_cast<int>(mf_batch->task_list.size())) {
@@ -338,20 +337,43 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
         return Status::OK();
     }
 
+    auto cache_it = mf_batch->batch_status_cache.find(task.batch_id);
+    if (cache_it != mf_batch->batch_status_cache.end() &&
+        cache_it->second != TransferStatusEnum::PENDING) {
+        task.status_word = cache_it->second;
+        if (task.status_word == TransferStatusEnum::COMPLETED)
+            task.transferred_bytes = task.length;
+        status = TransferStatus{task.status_word, task.transferred_bytes};
+        return Status::OK();
+    }
+
     auto ret = MemFabricUnderApi::SmemTransBatchStatusQuery(handle_, task.batch_id, 0);
-    LOG(INFO) << "batch_status_query: batch_id=" << task.batch_id
-              << ", ret=" << ret
-              << (ret == SMEM_TRANS_BATCH_DONE ? " (DONE)" :
-                  ret == SMEM_TRANS_BATCH_PENDING ? " (PENDING)" : " (FAILED)");
+    VLOG(1) << "batch_status_query: batch_id=" << task.batch_id
+            << ", ret=" << ret
+            << (ret == SMEM_TRANS_BATCH_DONE ? " (DONE)" :
+                ret == SMEM_TRANS_BATCH_PENDING ? " (PENDING)" : " (FAILED)");
+
+    TransferStatusEnum batch_status;
     if (ret == SMEM_TRANS_BATCH_DONE) {
-        task.status_word = TransferStatusEnum::COMPLETED;
-        task.transferred_bytes = task.length;
+        batch_status = TransferStatusEnum::COMPLETED;
     } else if (ret == SMEM_TRANS_BATCH_PENDING) {
-        task.status_word = TransferStatusEnum::PENDING;
+        batch_status = TransferStatusEnum::PENDING;
     } else {
         LOG(WARNING) << "smem_trans_batch_status_query error, ret=" << ret
                      << ", batch_id=" << task.batch_id;
-        task.status_word = TransferStatusEnum::FAILED;
+        batch_status = TransferStatusEnum::FAILED;
+    }
+
+    if (batch_status != TransferStatusEnum::PENDING) {
+        mf_batch->batch_status_cache[task.batch_id] = batch_status;
+        for (auto& t : mf_batch->task_list) {
+            if (t.batch_id == task.batch_id &&
+                t.status_word == TransferStatusEnum::PENDING) {
+                t.status_word = batch_status;
+                if (t.status_word == TransferStatusEnum::COMPLETED)
+                    t.transferred_bytes = t.length;
+            }
+        }
     }
 
     status = TransferStatus{task.status_word, task.transferred_bytes};
