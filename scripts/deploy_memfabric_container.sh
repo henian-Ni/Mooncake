@@ -3,14 +3,14 @@ set -Eeuo pipefail
 
 # Deploy freshly built Mooncake package into this container.
 # Run INSIDE container after build_memfabric.sh completes on the host.
-# Usage (inside container): bash /home/n00693955/code/Mooncake/scripts/deploy_memfabric_container.sh
+# Usage (inside container): bash $MOONCAKE_REPO/scripts/deploy_memfabric_container.sh
 
 GREEN="\033[0;32m"; BLUE="\033[0;34m"; YELLOW="\033[0;33m"; NC="\033[0m"
 print_section() { echo -e "\n${BLUE}=== $1 ===${NC}"; }
 print_success()  { echo -e "${GREEN}✓ $1${NC}"; }
 print_warn()     { echo -e "${YELLOW}! $1${NC}"; }
 
-REPO="/home/n00693955/code/Mooncake"
+REPO="${MOONCAKE_REPO:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 BUILD="$REPO/build"
 STAGING="/tmp/mooncake_deploy"
 

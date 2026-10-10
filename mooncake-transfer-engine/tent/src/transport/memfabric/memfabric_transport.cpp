@@ -26,16 +26,10 @@ std::atomic<int> MemFabricTransport::g_init_ref_{0};
 std::mutex MemFabricTransport::g_init_mutex_;
 
 MemFabricSubBatch::~MemFabricSubBatch() {
-    size_t pending = 0;
-    for (auto& task : task_list) {
-        if (task.status_word == TransferStatusEnum::PENDING && handle) {
-            ++pending;
-            MemFabricUnderApi::SmemTransBatchStatusQuery(handle, task.batch_id, 0);
-        }
-    }
-    if (!task_list.empty())
-        LOG(INFO) << "~MemFabricSubBatch: tasks=" << task_list.size()
-                  << ", pending_cleaned=" << pending;
+    if (pending_batch_count > 0)
+        LOG(WARNING) << "~MemFabricSubBatch: " << pending_batch_count
+                     << " batch(es) still PENDING out of "
+                     << task_list.size() << " tasks";
 }
 
 MemFabricTransport::MemFabricTransport() = default;
@@ -221,7 +215,6 @@ Status MemFabricTransport::resolveDestUrl(const Request& request,
 }
 
 Status MemFabricTransport::allocateSubBatch(SubBatchRef& batch, size_t max_size) {
-    LOG(INFO) << "allocateSubBatch: max_size=" << max_size;
     auto* mf_batch = new MemFabricSubBatch();
     mf_batch->handle = handle_;
     mf_batch->task_list.reserve(max_size);
@@ -235,7 +228,6 @@ Status MemFabricTransport::freeSubBatch(SubBatchRef& batch) {
         LOG(ERROR) << "Invalid sub-batch type in freeSubBatch";
         return Status::InvalidArgument("invalid sub-batch" LOC_MARK);
     }
-    LOG(INFO) << "freeSubBatch: task_count=" << mf_batch->task_list.size();
     delete mf_batch;
     batch = nullptr;
     return Status::OK();
@@ -243,7 +235,6 @@ Status MemFabricTransport::freeSubBatch(SubBatchRef& batch) {
 
 Status MemFabricTransport::submitTransferTasks(
     SubBatchRef batch, const std::vector<Request>& request_list) {
-    LOG(INFO) << "submitTransferTasks: request_count=" << request_list.size();
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch) {
         LOG(ERROR) << "Invalid sub-batch type in submitTransferTasks";
@@ -262,7 +253,6 @@ Status MemFabricTransport::submitTransferTasks(
     for (size_t i = 0; i < request_list.size(); ++i) {
         groups[dest_urls[i]].push_back(i);
     }
-    LOG(INFO) << "submitTransferTasks: grouped into " << groups.size() << " dest(s)";
 
     for (auto& [dest_url, indices] : groups) {
         const uint32_t batch_size = static_cast<uint32_t>(indices.size());
@@ -289,10 +279,6 @@ Status MemFabricTransport::submitTransferTasks(
         params.stream = nullptr;
         params.flags = 0;
 
-        LOG(INFO) << "batch_copy: dest_url=" << dest_url
-                  << ", batch_size=" << batch_size
-                  << ", opcode=" << (is_write ? "WRITE" : "READ");
-
         uint64_t batch_id = 0;
         auto ret = MemFabricUnderApi::SmemTransBatchCopy(handle_, &params, &batch_id);
         if (ret != 0) {
@@ -306,9 +292,6 @@ Status MemFabricTransport::submitTransferTasks(
             continue;
         }
 
-        LOG(INFO) << "batch_copy submitted: batch_id=" << batch_id
-                  << ", count=" << indices.size();
-
         for (size_t idx : indices) {
             auto& task = mf_batch->task_list[start + idx];
             task.request = request_list[idx];
@@ -316,9 +299,9 @@ Status MemFabricTransport::submitTransferTasks(
             task.length = request_list[idx].length;
             task.status_word = TransferStatusEnum::PENDING;
         }
+        mf_batch->pending_batch_count++;
     }
 
-    LOG(INFO) << "submitTransferTasks done: " << request_list.size() << " tasks";
     return Status::OK();
 }
 
@@ -365,6 +348,8 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
     }
 
     if (batch_status != TransferStatusEnum::PENDING) {
+        if (mf_batch->pending_batch_count > 0)
+            mf_batch->pending_batch_count--;
         mf_batch->batch_status_cache[task.batch_id] = batch_status;
         for (auto& t : mf_batch->task_list) {
             if (t.batch_id == task.batch_id &&
