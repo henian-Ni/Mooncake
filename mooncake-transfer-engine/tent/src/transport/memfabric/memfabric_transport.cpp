@@ -3,8 +3,10 @@
 #include <acl/acl.h>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
+#include <map>
 #include <optional>
-#include <unordered_map>
+#include <utility>
 
 namespace mooncake {
 namespace tent {
@@ -35,22 +37,7 @@ MemFabricSubBatch::~MemFabricSubBatch() {
 MemFabricTransport::MemFabricTransport() = default;
 MemFabricTransport::~MemFabricTransport() { (void)uninstall(); }
 
-Status MemFabricTransport::install(std::string& local_segment_name,
-                                   std::shared_ptr<ControlService> metadata,
-                                   std::shared_ptr<Topology> local_topology,
-                                   std::shared_ptr<Config> conf) {
-    LOG(INFO) << "install: segment_name=" << local_segment_name;
-
-    if (!MemFabricUnderApi::LoadLibrary()) {
-        LOG(ERROR) << "MemFabricUnderApi::LoadLibrary failed, libmf_smem.so "
-                      "unavailable";
-        return Status::DeviceNotFound("libmf_smem.so unavailable" LOC_MARK);
-    }
-    LOG(INFO) << "LoadLibrary: ok";
-
-    local_segment_name_ = local_segment_name;
-    metadata_ = metadata;
-
+Status MemFabricTransport::loadConfig(const std::shared_ptr<Config>& conf) {
     const char* protocol_env = std::getenv("MF_PROTOCOL");
     config_.data_op_type_str = protocol_env ? protocol_env : "";
     if (config_.data_op_type_str.empty()) {
@@ -73,6 +60,38 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     else if (log_level_str == "error")
         mf_log_level = 3;
     MemFabricUnderApi::SmemSetLogLevel(mf_log_level);
+
+    transfer_timeout_ms_ = 10000;
+    const char* timeout_env = std::getenv("MF_TRANSFER_TIMEOUT");
+    if (timeout_env && timeout_env[0] != '\0') {
+        try {
+            transfer_timeout_ms_ = static_cast<int32_t>(std::stoll(timeout_env));
+        } catch (const std::exception&) {
+            LOG(WARNING) << "MF_TRANSFER_TIMEOUT is not a valid integer: "
+                        << timeout_env;
+        }
+    }
+    if (transfer_timeout_ms_ <= 0) transfer_timeout_ms_ = 10000;
+
+    return Status::OK();
+}
+
+Status MemFabricTransport::install(std::string& local_segment_name,
+                                   std::shared_ptr<ControlService> metadata,
+                                   std::shared_ptr<Topology> local_topology,
+                                   std::shared_ptr<Config> conf) {
+    LOG(INFO) << "install: segment_name=" << local_segment_name;
+
+    if (!MemFabricUnderApi::LoadLibrary()) {
+        LOG(ERROR) << "MemFabricUnderApi::LoadLibrary failed, libmf_smem.so "
+                      "unavailable";
+        return Status::DeviceNotFound("libmf_smem.so unavailable" LOC_MARK);
+    }
+    LOG(INFO) << "LoadLibrary: ok";
+
+    local_segment_name_ = local_segment_name;
+    metadata_ = metadata;
+    CHECK_STATUS(loadConfig(conf));
 
     int32_t device_id = 0;
     if (aclrtGetDevice(&device_id) != ACL_ERROR_NONE) {
@@ -264,25 +283,27 @@ Status MemFabricTransport::submitTransferTasks(
         CHECK_STATUS(resolveDestUrl(request_list[i], dest_urls[i]));
     }
 
-    std::unordered_map<std::string, std::vector<size_t>> groups;
+    using GroupKey = std::pair<std::string, bool>;  // {dest_url, is_write}
+    std::map<GroupKey, std::vector<size_t>> groups;
     for (size_t i = 0; i < request_list.size(); ++i) {
-        groups[dest_urls[i]].push_back(i);
+        bool write = (request_list[i].opcode == Request::WRITE);
+        groups[{dest_urls[i], write}].push_back(i);
     }
 
-    for (auto& [dest_url, indices] : groups) {
+    for (auto& [key, indices] : groups) {
+        const auto& dest_url = key.first;
+        bool is_write = key.second;
         const uint32_t batch_size = static_cast<uint32_t>(indices.size());
         std::vector<void*> src_list(batch_size);
         std::vector<void*> dest_list(batch_size);
         std::vector<size_t> size_list(batch_size);
 
-        bool is_write = true;
         for (uint32_t j = 0; j < batch_size; ++j) {
             const auto& req = request_list[indices[j]];
             src_list[j] =
                 const_cast<void*>(static_cast<const void*>(req.source));
             dest_list[j] = reinterpret_cast<void*>(req.target_offset);
             size_list[j] = req.length;
-            is_write = (req.opcode == Request::WRITE);
         }
 
         smem_trans_batch_params_t params = {};
@@ -316,6 +337,7 @@ Status MemFabricTransport::submitTransferTasks(
             task.length = request_list[idx].length;
             task.status_word = TransferStatusEnum::PENDING;
         }
+        inflight_.fetch_add(1, std::memory_order_acq_rel);
         mf_batch->pending_batch_count++;
     }
 
@@ -368,6 +390,9 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
 
     if (batch_status != TransferStatusEnum::PENDING) {
         if (mf_batch->pending_batch_count > 0) mf_batch->pending_batch_count--;
+        if (inflight_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            inflight_cv_.notify_all();
+        }
         mf_batch->batch_status_cache[task.batch_id] = batch_status;
         for (auto& t : mf_batch->task_list) {
             if (t.batch_id == task.batch_id &&
@@ -416,13 +441,35 @@ Status MemFabricTransport::addMemoryBuffer(std::vector<BufferDesc>& desc_list,
 Status MemFabricTransport::removeMemoryBuffer(BufferDesc& desc) {
     if (!handle_) return Status::OK();
     LOG(INFO) << "removeMemoryBuffer: addr=" << desc.addr;
-    (void)MemFabricUnderApi::SmemTransDeregisterMem(
+    auto ret = MemFabricUnderApi::SmemTransDeregisterMem(
         handle_, reinterpret_cast<void*>(desc.addr));
+    if (ret != 0) {
+        LOG(ERROR) << "smem_trans_deregister_mem failed, ret=" << ret
+                   << ", addr=" << desc.addr;
+        return Status::InternalError("deregister_mem failed" LOC_MARK);
+    }
+    return Status::OK();
+}
+
+Status MemFabricTransport::quiesce() {
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(transfer_timeout_ms_);
+    std::unique_lock<std::mutex> lock(inflight_mu_);
+    while (inflight_.load(std::memory_order_acquire) > 0) {
+        if (inflight_cv_.wait_until(lock, deadline) ==
+            std::cv_status::timeout) {
+            LOG(WARNING) << "MemFabricTransport quiesce timed out with "
+                        << inflight_.load() << " in-flight batches";
+            break;
+        }
+    }
     return Status::OK();
 }
 
 Status MemFabricTransport::uninstall() {
     if (!installed_) return Status::OK();
+    (void)quiesce();
     LOG(INFO) << "uninstall: handle=" << handle_;
     if (handle_) {
         MemFabricUnderApi::SmemTransDestroy(handle_, 0);

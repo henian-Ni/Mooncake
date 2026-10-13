@@ -91,6 +91,7 @@ cmake --install build
 |------|------|--------|------|
 | `LD_LIBRARY_PATH` | 是 | — | 包含 `libmf_smem.so` 所在目录 |
 | `MF_PROTOCOL` | 是 | — | 传输协议：`device_sdma` / `device_rdma` / `host_rdma` / `device_urma` / `device_uboe` |
+| `MF_TRANSFER_TIMEOUT` | 否 | `10000` | 传输/quiesce 超时时间（毫秒） |
 | `MC_USE_TENT` | 是 | — | 设为 `1` 启用 TENT 模式 |
 | `MC_TENT_CONF` | 是 | — | TENT 配置 JSON 文件路径，需包含 `transports/memfabric/enable: true` |
 | `MC_STORE_USE_HUGEPAGE` | 否 | — | 设为 `1` 启用 Store 大页分配（使用 Store 池化时建议开启） |
@@ -112,6 +113,7 @@ cmake --install build
 
 ```bash
 export MF_PROTOCOL=device_rdma
+export MF_TRANSFER_TIMEOUT=10000
 export MC_USE_TENT=1
 export MC_TENT_CONF=/path/to/memfabric_tent.json
 SITE_PKG=$(python3 -c "import site; print(site.getsitepackages()[0])")

@@ -2,6 +2,7 @@
 #define MEMFABRIC_TRANSPORT_H_
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,6 +54,7 @@ class MemFabricTransport : public Transport {
                    std::shared_ptr<Topology> local_topology,
                    std::shared_ptr<Config> conf = nullptr) override;
     Status uninstall() override;
+    Status quiesce() override;
 
     Status allocateSubBatch(SubBatchRef& batch, size_t max_size) override;
     Status freeSubBatch(SubBatchRef& batch) override;
@@ -73,6 +75,7 @@ class MemFabricTransport : public Transport {
     bool supportNotification() const override { return false; }
 
    private:
+    Status loadConfig(const std::shared_ptr<Config>& conf);
     Status publishLocalDevices();
     Status resolveDestUrl(const Request& request, std::string& dest_url) const;
 
@@ -81,6 +84,11 @@ class MemFabricTransport : public Transport {
     std::shared_ptr<ControlService> metadata_;
     std::string local_segment_name_;
     MemFabricConfig config_;
+
+    std::mutex inflight_mu_;
+    std::condition_variable inflight_cv_;
+    std::atomic<int> inflight_{0};
+    int32_t transfer_timeout_ms_{10000};
 
     static std::atomic<int> g_init_ref_;
     static std::mutex g_init_mutex_;

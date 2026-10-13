@@ -93,6 +93,7 @@ cmake --install build
 |----------|----------|---------|-------------|
 | `LD_LIBRARY_PATH` | Yes | — | Directory containing `libmf_smem.so` |
 | `MF_PROTOCOL` | Yes | — | Transport protocol: `device_sdma` / `device_rdma` / `host_rdma` / `device_urma` / `device_uboe` |
+| `MF_TRANSFER_TIMEOUT` | No | `10000` | Transfer/quiesce timeout in milliseconds |
 | `MC_USE_TENT` | Yes | — | Set to `1` to enable TENT mode |
 | `MC_TENT_CONF` | Yes | — | Path to TENT config JSON file; must include `transports/memfabric/enable: true` |
 | `MC_STORE_USE_HUGEPAGE` | No | — | Set to `1` to enable Store hugepage allocation (recommended when using Store pooling) |
@@ -114,6 +115,7 @@ cmake --install build
 
 ```bash
 export MF_PROTOCOL=device_rdma
+export MF_TRANSFER_TIMEOUT=10000
 export MC_USE_TENT=1
 export MC_TENT_CONF=/path/to/memfabric_tent.json
 SITE_PKG=$(python3 -c "import site; print(site.getsitepackages()[0])")

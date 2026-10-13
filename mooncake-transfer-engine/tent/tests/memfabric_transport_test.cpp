@@ -6,6 +6,7 @@
 #include <acl/acl.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -103,9 +104,11 @@ struct MockMemFabricState {
     int destroy_calls = 0;
     int get_rpc_port_calls = 0;
     int batch_copy_calls = 0;
+    std::vector<smem_trans_opcode_t> batch_opcodes;
     int status_query_calls = 0;
     int register_mem_calls = 0;
     int deregister_mem_calls = 0;
+    int32_t deregister_ret = 0;
     int set_log_level_calls = 0;
     std::atomic<uint64_t> next_batch_id{1};
     int32_t status_query_result = SMEM_TRANS_BATCH_DONE;
@@ -163,13 +166,14 @@ int32_t mockSmemTransBatchRegisterMem(smem_trans_t, void*[], size_t[], uint32_t,
 int32_t mockSmemTransDeregisterMem(smem_trans_t, void*) {
     std::lock_guard<std::mutex> lock(g_state->mu);
     g_state->deregister_mem_calls++;
-    return 0;
+    return g_state->deregister_ret;
 }
 
-int32_t mockSmemTransBatchCopy(smem_trans_t, smem_trans_batch_params_t*,
+int32_t mockSmemTransBatchCopy(smem_trans_t, smem_trans_batch_params_t* params,
                                uint64_t* batchId) {
     std::lock_guard<std::mutex> lock(g_state->mu);
     g_state->batch_copy_calls++;
+    if (params) g_state->batch_opcodes.push_back(params->opcode);
     if (g_state->batch_copy_ret != 0) return g_state->batch_copy_ret;
     *batchId = g_state->next_batch_id.fetch_add(1, std::memory_order_relaxed);
     return 0;
@@ -196,6 +200,16 @@ int32_t mockSmemSetLogLevel(int) {
 Request MakeWrite(void* src, uint64_t dest, size_t len) {
     Request request{};
     request.opcode = Request::WRITE;
+    request.source = src;
+    request.target_id = LOCAL_SEGMENT_ID;
+    request.target_offset = dest;
+    request.length = len;
+    return request;
+}
+
+Request MakeRead(void* src, uint64_t dest, size_t len) {
+    Request request{};
+    request.opcode = Request::READ;
     request.source = src;
     request.target_id = LOCAL_SEGMENT_ID;
     request.target_offset = dest;
@@ -299,6 +313,25 @@ TEST_F(MemFabricTransportTest, InstallFailsWhenCreateReturnsNull) {
     EXPECT_EQ(state_->create_calls, 1);
 }
 
+TEST_F(MemFabricTransportTest, MixedWriteAndReadToSamePeerSubmitsTwoBatches) {
+    ASSERT_TRUE(Install().ok());
+    ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
+
+    char src[32]{};
+    std::vector<Request> requests = {MakeWrite(src, 0x1000, 32),
+                                     MakeRead(src, 0x2000, 32)};
+    ASSERT_TRUE(transport_->submitTransferTasks(batch_, requests).ok());
+
+    EXPECT_EQ(state_->batch_copy_calls, 2);
+    ASSERT_EQ(state_->batch_opcodes.size(), 2u);
+    EXPECT_EQ(state_->batch_opcodes[0], SMEM_TRANS_OP_WRITE);
+    EXPECT_EQ(state_->batch_opcodes[1], SMEM_TRANS_OP_READ);
+
+    auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
+    ASSERT_NE(mf_batch, nullptr);
+    EXPECT_EQ(mf_batch->pending_batch_count, 2u);
+}
+
 TEST_F(MemFabricTransportTest, SubmitAndGetStatusCompleted) {
     ASSERT_TRUE(Install().ok());
     ASSERT_TRUE(transport_->allocateSubBatch(batch_, 128).ok());
@@ -391,6 +424,50 @@ TEST_F(MemFabricTransportTest, PendingBatchDestructorWarning) {
     batch_ = nullptr;
 }
 
+TEST_F(MemFabricTransportTest, QuiesceDrainsInflightBatches) {
+    ASSERT_TRUE(Install().ok());
+    ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
+
+    char src[32]{};
+    ASSERT_TRUE(
+        transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
+            .ok());
+    EXPECT_EQ(transport_->inflight_.load(), 1);
+
+    g_state->status_query_result = SMEM_TRANS_BATCH_DONE;
+    TransferStatus status{};
+    ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
+    EXPECT_EQ(status.s, TransferStatusEnum::COMPLETED);
+    EXPECT_EQ(transport_->inflight_.load(), 0);
+
+    ASSERT_TRUE(transport_->quiesce().ok());
+}
+
+TEST_F(MemFabricTransportTest, QuiesceTimeoutWithPendingBatches) {
+    ASSERT_TRUE(Install().ok());
+    transport_->transfer_timeout_ms_ = 100;
+    ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
+
+    char src[32]{};
+    ASSERT_TRUE(
+        transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
+            .ok());
+    EXPECT_EQ(transport_->inflight_.load(), 1);
+
+    g_state->status_query_result = SMEM_TRANS_BATCH_PENDING;
+    TransferStatus status{};
+    ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
+    EXPECT_EQ(status.s, TransferStatusEnum::PENDING);
+
+    auto start = std::chrono::steady_clock::now();
+    ASSERT_TRUE(transport_->quiesce().ok());
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start)
+                       .count();
+    EXPECT_GE(elapsed, 90);
+    EXPECT_EQ(transport_->inflight_.load(), 1);
+}
+
 TEST_F(MemFabricTransportTest, AddRemoveMemoryBuffer) {
     ASSERT_TRUE(Install().ok());
 
@@ -409,6 +486,25 @@ TEST_F(MemFabricTransportTest, AddRemoveMemoryBuffer) {
 
     ASSERT_TRUE(transport_->removeMemoryBuffer(desc).ok());
     EXPECT_EQ(state_->deregister_mem_calls, 1);
+}
+
+TEST_F(MemFabricTransportTest, DeregisterFailurePropagatesError) {
+    ASSERT_TRUE(Install().ok());
+
+    BufferDesc desc{};
+    desc.addr = 0x10000;
+    desc.length = 4096;
+    MemoryOptions options;
+    ASSERT_TRUE(transport_->addMemoryBuffer(desc, options).ok());
+
+    g_state->deregister_ret = -9;
+    auto status = transport_->removeMemoryBuffer(desc);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(state_->deregister_mem_calls, 1);
+
+    g_state->deregister_ret = 0;
+    ASSERT_TRUE(transport_->removeMemoryBuffer(desc).ok());
+    EXPECT_EQ(state_->deregister_mem_calls, 2);
 }
 
 TEST_F(MemFabricTransportTest, AddMemoryBufferFailsBeforeInstall) {
