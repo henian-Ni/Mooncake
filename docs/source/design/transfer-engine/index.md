@@ -543,11 +543,3 @@ For the complete C++ API reference, see [Transfer Engine C++ API](../../api-refe
 
 transfer-engine-bench-tuning
 :::
-
-## Transport Guides
-
-:::{toctree}
-:maxdepth: 1
-
-memfabric_transport
-:::
