@@ -125,9 +125,7 @@ bool RestoreAgentModeDeviceZero() {
     }
     return true;
 }
-#endif
 
-#ifdef USE_ASCEND_DIRECT
 void *AllocateAscendStoreSegment(size_t segment_size,
                                  const std::string &protocol, bool use_hugepage,
                                  bool defer_hugetlb, size_t *mapped_size) {
