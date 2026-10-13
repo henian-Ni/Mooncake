@@ -4,9 +4,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <limits>
 #include <map>
 #include <optional>
 #include <utility>
+
+#include "tent/common/utils/ip.h"
 
 namespace mooncake {
 namespace tent {
@@ -93,6 +96,37 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     metadata_ = metadata;
     CHECK_STATUS(loadConfig(conf));
 
+    if (!metadata_) {
+        return Status::InvalidArgument("metadata is null" LOC_MARK);
+    }
+    const auto local_segment = metadata_->segmentManager().getLocal();
+    if (!local_segment) {
+        return Status::InvalidArgument("local segment is missing" LOC_MARK);
+    }
+    const auto [host, rpc_port] =
+        parseHostNameWithPort(local_segment->rpc_server_addr, 0);
+    if (host.empty() || rpc_port == 0 || host == "0.0.0.0" || host == "::") {
+        return Status::InvalidArgument(
+            "Invalid local RPC address: " + local_segment->rpc_server_addr +
+            LOC_MARK);
+    }
+    const bool ipv6 = host.find(':') != std::string::npos;
+    // Segment names are logical identifiers. Reuse only the RPC host and
+    // let MemFabric allocate its own listening port.
+    const auto bind_url = buildIpAddrWithPort(host, 0, ipv6);
+    const auto nic_url = "tcp://" + buildIpAddrWithPort(host, rpc_port, ipv6);
+    const bool device_rdma =
+        config_.data_op_type.value() & SMEMB_DATA_OP_DEVICE_RDMA;
+    smem_trans_config_t cfg;
+    // Reserve room for any assigned port instead of silently truncating an
+    // endpoint in the vendor's fixed-size fields.
+    if (buildIpAddrWithPort(host, std::numeric_limits<uint16_t>::max(), ipv6)
+                .size() >= sizeof(cfg.url) ||
+        (device_rdma && nic_url.size() >= sizeof(cfg.nic))) {
+        return Status::InvalidArgument(
+            "Local RPC address exceeds MemFabric endpoint capacity" LOC_MARK);
+    }
+
     int32_t device_id = 0;
     if (aclrtGetDevice(&device_id) != ACL_ERROR_NONE) {
         LOG(ERROR) << "aclrtGetDevice failed, device may be not set";
@@ -115,7 +149,6 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         }
     }
 
-    smem_trans_config_t cfg;
     if (MemFabricUnderApi::SmemTransConfigInit(&cfg) != 0) {
         LOG(ERROR) << "smem_trans_config_init failed";
         std::lock_guard<std::mutex> lock(g_init_mutex_);
@@ -127,20 +160,10 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     cfg.deviceId = device_id;
     cfg.dataOpType = config_.data_op_type.value();
 
-    {
-        char host_ip[64] = {};
-        auto pos = local_segment_name.find(':');
-        if (pos != std::string::npos) {
-            auto len = std::min(pos, sizeof(host_ip) - 1);
-            std::memcpy(host_ip, local_segment_name.c_str(), len);
-            host_ip[len] = '\0';
-        }
-        std::snprintf(cfg.url, sizeof(cfg.url), "%s:0", host_ip);
-        if (config_.data_op_type.value() & SMEMB_DATA_OP_DEVICE_RDMA) {
-            std::snprintf(cfg.nic, sizeof(cfg.nic), "tcp://%s",
-                          local_segment_name.c_str());
-            LOG(INFO) << "RDMA mode: nic=" << cfg.nic;
-        }
+    std::memcpy(cfg.url, bind_url.c_str(), bind_url.size() + 1);
+    if (device_rdma) {
+        std::memcpy(cfg.nic, nic_url.c_str(), nic_url.size() + 1);
+        LOG(INFO) << "RDMA mode: nic=" << cfg.nic;
     }
     LOG(INFO) << "trans config: url=" << cfg.url << ", nic=" << cfg.nic
               << ", deviceId=" << cfg.deviceId
@@ -159,16 +182,7 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     uint16_t actual_port = 0;
     if (MemFabricUnderApi::SmemTransGetRpcPort(handle_, &actual_port) == 0 &&
         actual_port != 0) {
-        char host_ip[64] = {};
-        auto pos = local_segment_name.find(':');
-        if (pos != std::string::npos) {
-            auto len = std::min(pos, sizeof(host_ip) - 1);
-            std::memcpy(host_ip, local_segment_name.c_str(), len);
-            host_ip[len] = '\0';
-        }
-        char url_buf[64];
-        std::snprintf(url_buf, sizeof(url_buf), "%s:%u", host_ip, actual_port);
-        config_.store_url = url_buf;
+        config_.store_url = buildIpAddrWithPort(host, actual_port, ipv6);
         LOG(INFO) << "smem_trans_get_rpc_port: port=" << actual_port
                   << ", store_url=" << config_.store_url;
     } else {
@@ -275,9 +289,8 @@ Status MemFabricTransport::submitTransferTasks(
         return Status::InvalidArgument("invalid sub-batch" LOC_MARK);
     }
 
-    const size_t start = mf_batch->task_list.size();
-    mf_batch->task_list.resize(start + request_list.size());
-
+    // Resolve every destination before changing the sub-batch so an error
+    // leaves existing tasks untouched and dispatches no new work.
     std::vector<std::string> dest_urls(request_list.size());
     for (size_t i = 0; i < request_list.size(); ++i) {
         CHECK_STATUS(resolveDestUrl(request_list[i], dest_urls[i]));
@@ -289,6 +302,9 @@ Status MemFabricTransport::submitTransferTasks(
         bool write = (request_list[i].opcode == Request::WRITE);
         groups[{dest_urls[i], write}].push_back(i);
     }
+
+    const size_t start = mf_batch->task_list.size();
+    mf_batch->task_list.resize(start + request_list.size());
 
     for (auto& [key, indices] : groups) {
         const auto& dest_url = key.first;

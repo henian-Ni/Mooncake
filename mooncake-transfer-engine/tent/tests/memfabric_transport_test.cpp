@@ -99,6 +99,7 @@ namespace tent {
 struct MockMemFabricState {
     std::mutex mu;
     int init_calls = 0;
+    int uninit_calls = 0;
     int config_init_calls = 0;
     int create_calls = 0;
     int destroy_calls = 0;
@@ -113,6 +114,10 @@ struct MockMemFabricState {
     std::atomic<uint64_t> next_batch_id{1};
     int32_t status_query_result = SMEM_TRANS_BATCH_DONE;
     int32_t batch_copy_ret = 0;
+    int32_t get_rpc_port_ret = 0;
+    uint16_t rpc_port = 12345;
+    std::string create_url;
+    std::string create_nic;
     bool create_fail = false;
 };
 
@@ -124,7 +129,10 @@ int32_t mockSmemTransInit(uint32_t, uint32_t) {
     return 0;
 }
 
-void mockSmemTransUninit(uint32_t) {}
+void mockSmemTransUninit(uint32_t) {
+    std::lock_guard<std::mutex> lock(g_state->mu);
+    g_state->uninit_calls++;
+}
 
 int32_t mockSmemTransConfigInit(smem_trans_config_t* config) {
     std::lock_guard<std::mutex> lock(g_state->mu);
@@ -133,9 +141,11 @@ int32_t mockSmemTransConfigInit(smem_trans_config_t* config) {
     return 0;
 }
 
-smem_trans_t mockSmemTransCreate(const smem_trans_config_t*, uint32_t) {
+smem_trans_t mockSmemTransCreate(const smem_trans_config_t* config, uint32_t) {
     std::lock_guard<std::mutex> lock(g_state->mu);
     g_state->create_calls++;
+    g_state->create_url = config->url;
+    g_state->create_nic = config->nic;
     if (g_state->create_fail) return nullptr;
     return reinterpret_cast<smem_trans_t>(0x2000);
 }
@@ -148,8 +158,8 @@ void mockSmemTransDestroy(smem_trans_t, uint32_t) {
 int32_t mockSmemTransGetRpcPort(smem_trans_t, uint16_t* port) {
     std::lock_guard<std::mutex> lock(g_state->mu);
     g_state->get_rpc_port_calls++;
-    *port = 12345;
-    return 0;
+    *port = g_state->rpc_port;
+    return g_state->get_rpc_port_ret;
 }
 
 int32_t mockSmemTransRegisterMem(smem_trans_t, void*, size_t, uint32_t) {
@@ -228,6 +238,7 @@ class MemFabricTransportTest : public ::testing::Test {
         uint16_t port = 0;
         ASSERT_TRUE(metadata_->start(port).ok());
         name_ = "127.0.0.1:" + std::to_string(static_cast<unsigned>(port));
+        ASSERT_TRUE(SetRpcAddress(name_).ok());
         transport_ = std::make_unique<MemFabricTransport>();
     }
 
@@ -248,6 +259,22 @@ class MemFabricTransportTest : public ::testing::Test {
         setenv("MF_PROTOCOL", "device_rdma", 1);
         auto conf = std::make_shared<Config>();
         return transport_->install(name_, metadata_, nullptr, conf);
+    }
+
+    Status SetRpcAddress(const std::string& address) {
+        return metadata_->segmentManager().updateLocal(
+            [&](SegmentDesc& segment) -> Status {
+                segment.rpc_server_addr = address;
+                return Status::OK();
+            });
+    }
+
+    std::string PublishedEndpoint() const {
+        auto segment = metadata_->segmentManager().getLocal();
+        const auto& attrs =
+            std::get<MemorySegmentDesc>(segment->detail).device_attrs;
+        auto it = attrs.find("memfabric_unique_id");
+        return it == attrs.end() ? "" : it->second;
     }
 
     void InstallMockApi();
@@ -311,6 +338,83 @@ TEST_F(MemFabricTransportTest, InstallFailsWhenCreateReturnsNull) {
     auto status = Install();
     EXPECT_FALSE(status.ok());
     EXPECT_EQ(state_->create_calls, 1);
+    EXPECT_TRUE(PublishedEndpoint().empty());
+}
+
+TEST_F(MemFabricTransportTest, InstallUsesRpcAddressForOpaqueSegmentName) {
+    name_ = "segment_noname_memfabric_test";
+    ASSERT_TRUE(SetRpcAddress("192.0.2.10:9000").ok());
+
+    ASSERT_TRUE(Install().ok());
+
+    EXPECT_EQ(state_->create_url, "192.0.2.10:0");
+    EXPECT_EQ(state_->create_nic, "tcp://192.0.2.10:9000");
+    EXPECT_EQ(PublishedEndpoint(), "192.0.2.10:12345");
+    EXPECT_EQ(name_, "segment_noname_memfabric_test");
+}
+
+TEST_F(MemFabricTransportTest, InstallIgnoresAddressLikeSegmentName) {
+    name_ = "198.51.100.20:8000";
+    ASSERT_TRUE(SetRpcAddress("192.0.2.10:9000").ok());
+
+    ASSERT_TRUE(Install().ok());
+
+    EXPECT_EQ(state_->create_url, "192.0.2.10:0");
+    EXPECT_EQ(state_->create_nic, "tcp://192.0.2.10:9000");
+    EXPECT_EQ(PublishedEndpoint(), "192.0.2.10:12345");
+}
+
+TEST_F(MemFabricTransportTest, InstallFormatsIpv6RpcEndpoint) {
+    name_ = "segment_noname_ipv6";
+    ASSERT_TRUE(SetRpcAddress("[2001:db8::10]:9000").ok());
+
+    ASSERT_TRUE(Install().ok());
+
+    EXPECT_EQ(state_->create_url, "[2001:db8::10]:0");
+    EXPECT_EQ(state_->create_nic, "tcp://[2001:db8::10]:9000");
+    EXPECT_EQ(PublishedEndpoint(), "[2001:db8::10]:12345");
+}
+
+TEST_F(MemFabricTransportTest, InstallRejectsInvalidRpcAddress) {
+    for (const auto& address :
+         {"", ":9000", "127.0.0.1:bad", "127.0.0.1:0", "0.0.0.0:9000",
+          "[::]:9000", "[2001::db8::1]:9000"}) {
+        SCOPED_TRACE(address);
+        ASSERT_TRUE(SetRpcAddress(address).ok());
+        ASSERT_FALSE(Install().ok());
+        EXPECT_EQ(state_->init_calls, 0);
+        EXPECT_EQ(state_->create_calls, 0);
+        EXPECT_TRUE(PublishedEndpoint().empty());
+    }
+}
+
+TEST_F(MemFabricTransportTest, InstallRejectsOversizedRpcAddress) {
+    ASSERT_TRUE(SetRpcAddress(std::string(64, 'a') + ":9000").ok());
+
+    EXPECT_FALSE(Install().ok());
+    EXPECT_EQ(state_->init_calls, 0);
+    EXPECT_EQ(state_->create_calls, 0);
+    EXPECT_TRUE(PublishedEndpoint().empty());
+}
+
+TEST_F(MemFabricTransportTest, InstallDoesNotPublishWhenPortQueryFails) {
+    state_->get_rpc_port_ret = -1;
+
+    EXPECT_FALSE(Install().ok());
+    EXPECT_EQ(state_->get_rpc_port_calls, 1);
+    EXPECT_EQ(state_->destroy_calls, 1);
+    EXPECT_EQ(state_->uninit_calls, 1);
+    EXPECT_TRUE(PublishedEndpoint().empty());
+}
+
+TEST_F(MemFabricTransportTest, InstallDoesNotPublishZeroPort) {
+    state_->rpc_port = 0;
+
+    EXPECT_FALSE(Install().ok());
+    EXPECT_EQ(state_->get_rpc_port_calls, 1);
+    EXPECT_EQ(state_->destroy_calls, 1);
+    EXPECT_EQ(state_->uninit_calls, 1);
+    EXPECT_TRUE(PublishedEndpoint().empty());
 }
 
 TEST_F(MemFabricTransportTest, MixedWriteAndReadToSamePeerSubmitsTwoBatches) {
@@ -382,6 +486,97 @@ TEST_F(MemFabricTransportTest, SubmitAndGetStatusPending) {
 
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
     EXPECT_EQ(mf_batch->pending_batch_count, 1u);
+}
+
+TEST_F(MemFabricTransportTest, InvalidDestinationLeavesEmptyBatchUnchanged) {
+    ASSERT_TRUE(Install().ok());
+    ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
+
+    char src[32]{};
+    auto valid = MakeWrite(src, 0x1000, sizeof(src));
+    auto invalid = MakeWrite(src, 0x2000, sizeof(src));
+    // The fixture has not opened any remote segments.
+    invalid.target_id = LOCAL_SEGMENT_ID + 1;
+
+    EXPECT_FALSE(
+        transport_->submitTransferTasks(batch_, {valid, invalid}).ok());
+
+    auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
+    ASSERT_NE(mf_batch, nullptr);
+    EXPECT_EQ(mf_batch->size(), 0u);
+    EXPECT_EQ(mf_batch->pending_batch_count, 0u);
+    EXPECT_TRUE(mf_batch->batch_status_cache.empty());
+    EXPECT_EQ(state_->batch_copy_calls, 0);
+    EXPECT_EQ(state_->status_query_calls, 0);
+}
+
+TEST_F(MemFabricTransportTest, InvalidDestinationPreservesExistingTasks) {
+    ASSERT_TRUE(Install().ok());
+    ASSERT_TRUE(transport_->allocateSubBatch(batch_, 8).ok());
+
+    char src[64]{};
+    ASSERT_TRUE(
+        transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
+            .ok());
+    TransferStatus status{};
+    ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
+    ASSERT_EQ(status.s, TransferStatusEnum::COMPLETED);
+
+    ASSERT_TRUE(
+        transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x2000, 16)})
+            .ok());
+    state_->status_query_result = SMEM_TRANS_BATCH_PENDING;
+    ASSERT_TRUE(transport_->getTransferStatus(batch_, 1, status).ok());
+    ASSERT_EQ(status.s, TransferStatusEnum::PENDING);
+
+    auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
+    ASSERT_NE(mf_batch, nullptr);
+    const auto original_tasks = mf_batch->task_list;
+    const auto original_cache = mf_batch->batch_status_cache;
+    const auto original_pending = mf_batch->pending_batch_count;
+    const auto original_copy_calls = state_->batch_copy_calls;
+    const auto original_query_calls = state_->status_query_calls;
+
+    auto valid = MakeWrite(src, 0x3000, 8);
+    auto invalid = MakeWrite(src, 0x4000, 8);
+    invalid.target_id = LOCAL_SEGMENT_ID + 1;
+    EXPECT_FALSE(
+        transport_->submitTransferTasks(batch_, {valid, invalid}).ok());
+
+    ASSERT_EQ(mf_batch->size(), original_tasks.size());
+    EXPECT_EQ(mf_batch->pending_batch_count, original_pending);
+    EXPECT_EQ(mf_batch->batch_status_cache, original_cache);
+    EXPECT_EQ(state_->batch_copy_calls, original_copy_calls);
+    EXPECT_EQ(state_->status_query_calls, original_query_calls);
+    for (size_t i = 0; i < original_tasks.size(); ++i) {
+        const auto& before = original_tasks[i];
+        const auto& after = mf_batch->task_list[i];
+        EXPECT_EQ(after.request.opcode, before.request.opcode);
+        EXPECT_EQ(after.request.source, before.request.source);
+        EXPECT_EQ(after.request.target_id, before.request.target_id);
+        EXPECT_EQ(after.request.target_offset, before.request.target_offset);
+        EXPECT_EQ(after.request.length, before.request.length);
+        EXPECT_EQ(after.batch_id, before.batch_id);
+        EXPECT_EQ(after.status_word, before.status_word);
+        EXPECT_EQ(after.length, before.length);
+        EXPECT_EQ(after.transferred_bytes, before.transferred_bytes);
+    }
+
+    // A subsequent valid append must use the next slot without a gap.
+    ASSERT_TRUE(transport_->submitTransferTasks(batch_, {valid}).ok());
+    ASSERT_EQ(mf_batch->size(), original_tasks.size() + 1);
+    EXPECT_EQ(state_->batch_copy_calls, original_copy_calls + 1);
+    EXPECT_EQ(mf_batch->pending_batch_count, original_pending + 1);
+
+    state_->status_query_result = SMEM_TRANS_BATCH_DONE;
+    const size_t expected_bytes[] = {32, 16, 8};
+    for (int task_id = 0; task_id < 3; ++task_id) {
+        ASSERT_TRUE(
+            transport_->getTransferStatus(batch_, task_id, status).ok());
+        EXPECT_EQ(status.s, TransferStatusEnum::COMPLETED);
+        EXPECT_EQ(status.transferred_bytes, expected_bytes[task_id]);
+    }
+    EXPECT_EQ(mf_batch->pending_batch_count, 0u);
 }
 
 TEST_F(MemFabricTransportTest, FailedBatchPropagatesToAllTasks) {

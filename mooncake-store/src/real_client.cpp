@@ -73,7 +73,8 @@
 #endif
 #if defined(USE_ASCEND_DIRECT) || defined(USE_UBSHMEM)
 #include "ascend_allocator.h"
-#elif defined(USE_MEMFABRIC)
+#endif
+#ifdef USE_MEMFABRIC
 #include "memfabric_allocator.h"
 #endif
 
