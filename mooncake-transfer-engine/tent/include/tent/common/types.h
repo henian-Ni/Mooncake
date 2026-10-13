@@ -61,6 +61,7 @@ enum TransportType : int {
     XPU,
     HYLINK,
     FABRIC,
+    MEMFABRIC,
     // Sentinel: must remain the last enumerator.
     kNumTransportTypes,
 };
@@ -108,6 +109,8 @@ inline const char* transportTypeName(TransportType type) {
             return "hylink";
         case FABRIC:
             return "fabric";
+        case MEMFABRIC:
+            return "memfabric";
         case kNumTransportTypes:
             return "unknown";
     }
@@ -132,6 +135,7 @@ inline TransportType parseTransportType(const std::string& str) {
     if (str == "xpu") return XPU;
     if (str == "hylink") return HYLINK;
     if (str == "fabric") return FABRIC;
+    if (str == "memfabric") return MEMFABRIC;
     return UNSPEC;
 }
 
