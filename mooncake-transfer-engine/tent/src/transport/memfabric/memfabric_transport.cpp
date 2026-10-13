@@ -68,10 +68,11 @@ Status MemFabricTransport::loadConfig(const std::shared_ptr<Config>& conf) {
     const char* timeout_env = std::getenv("MF_TRANSFER_TIMEOUT");
     if (timeout_env && timeout_env[0] != '\0') {
         try {
-            transfer_timeout_ms_ = static_cast<int32_t>(std::stoll(timeout_env));
+            transfer_timeout_ms_ =
+                static_cast<int32_t>(std::stoll(timeout_env));
         } catch (const std::exception&) {
             LOG(WARNING) << "MF_TRANSFER_TIMEOUT is not a valid integer: "
-                        << timeout_env;
+                         << timeout_env;
         }
     }
     if (transfer_timeout_ms_ <= 0) transfer_timeout_ms_ = 10000;
@@ -468,15 +469,14 @@ Status MemFabricTransport::removeMemoryBuffer(BufferDesc& desc) {
 }
 
 Status MemFabricTransport::quiesce() {
-    const auto deadline =
-        std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(transfer_timeout_ms_);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(transfer_timeout_ms_);
     std::unique_lock<std::mutex> lock(inflight_mu_);
     while (inflight_.load(std::memory_order_acquire) > 0) {
         if (inflight_cv_.wait_until(lock, deadline) ==
             std::cv_status::timeout) {
             LOG(WARNING) << "MemFabricTransport quiesce timed out with "
-                        << inflight_.load() << " in-flight batches";
+                         << inflight_.load() << " in-flight batches";
             break;
         }
     }
