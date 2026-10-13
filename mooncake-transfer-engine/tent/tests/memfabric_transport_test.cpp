@@ -5,6 +5,8 @@
 
 #include <acl/acl.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -120,6 +122,7 @@ struct MockMemFabricState {
     std::string create_url;
     std::string create_nic;
     bool create_fail = false;
+    bool copy_data = false;
 };
 
 static std::shared_ptr<MockMemFabricState> g_state;
@@ -186,6 +189,17 @@ int32_t mockSmemTransBatchCopy(smem_trans_t, smem_trans_batch_params_t* params,
     g_state->batch_copy_calls++;
     if (params) g_state->batch_opcodes.push_back(params->opcode);
     if (g_state->batch_copy_ret != 0) return g_state->batch_copy_ret;
+    if (g_state->copy_data) {
+        for (uint32_t i = 0; i < params->batchSize; ++i) {
+            if (params->opcode == SMEM_TRANS_OP_WRITE) {
+                std::memcpy(params->destList[i], params->srcList[i],
+                            params->sizeList[i]);
+            } else {
+                std::memcpy(params->srcList[i], params->destList[i],
+                            params->sizeList[i]);
+            }
+        }
+    }
     *batchId = g_state->next_batch_id.fetch_add(1, std::memory_order_relaxed);
     return 0;
 }
@@ -262,6 +276,12 @@ class MemFabricTransportTest : public ::testing::Test {
         setenv("MF_PROTOCOL", "device_rdma", 1);
         auto conf = std::make_shared<Config>();
         return transport_->install(name_, metadata_, nullptr, conf);
+    }
+
+    int InflightCount() const { return transport_->inflight_.load(); }
+
+    void SetTransferTimeout(int32_t timeout_ms) {
+        transport_->transfer_timeout_ms_ = timeout_ms;
     }
 
     Status SetRpcAddress(const std::string& address) {
@@ -424,19 +444,51 @@ TEST_F(MemFabricTransportTest, MixedWriteAndReadToSamePeerSubmitsTwoBatches) {
     ASSERT_TRUE(Install().ok());
     ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
 
-    char src[32]{};
-    std::vector<Request> requests = {MakeWrite(src, 0x1000, 32),
-                                     MakeRead(src, 0x2000, 32)};
-    ASSERT_TRUE(transport_->submitTransferTasks(batch_, requests).ok());
+    state_->copy_data = true;
+    for (bool read_first : {false, true}) {
+        SCOPED_TRACE(read_first);
+        std::array<char, 32> local_source, remote_source;
+        local_source.fill(0x11);
+        remote_source.fill(0x22);
+        std::array<char, 32> remote_destination{}, local_destination{};
+        const auto expected_write = local_source;
+        const auto expected_read = remote_source;
+        std::vector<Request> requests = {
+            MakeWrite(local_source.data(),
+                      reinterpret_cast<uint64_t>(remote_destination.data()),
+                      local_source.size()),
+            MakeRead(local_destination.data(),
+                     reinterpret_cast<uint64_t>(remote_source.data()),
+                     remote_source.size())};
+        if (read_first) std::reverse(requests.begin(), requests.end());
+        state_->batch_opcodes.clear();
+        const auto previous_calls = state_->batch_copy_calls;
+        const auto start_task = batch_->size();
 
-    EXPECT_EQ(state_->batch_copy_calls, 2);
-    ASSERT_EQ(state_->batch_opcodes.size(), 2u);
-    EXPECT_EQ(state_->batch_opcodes[0], SMEM_TRANS_OP_WRITE);
-    EXPECT_EQ(state_->batch_opcodes[1], SMEM_TRANS_OP_READ);
+        ASSERT_TRUE(transport_->submitTransferTasks(batch_, requests).ok());
 
-    auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
-    ASSERT_NE(mf_batch, nullptr);
-    EXPECT_EQ(mf_batch->pending_batch_count, 2u);
+        EXPECT_EQ(state_->batch_copy_calls, previous_calls + 2);
+        const auto& opcodes = state_->batch_opcodes;
+        ASSERT_EQ(opcodes.size(), 2u);
+        EXPECT_EQ(
+            std::count(opcodes.begin(), opcodes.end(), SMEM_TRANS_OP_READ), 1);
+        EXPECT_EQ(
+            std::count(opcodes.begin(), opcodes.end(), SMEM_TRANS_OP_WRITE), 1);
+        EXPECT_EQ(remote_destination, expected_write);
+        EXPECT_EQ(local_destination, expected_read);
+        EXPECT_EQ(local_source, expected_write);
+        EXPECT_EQ(remote_source, expected_read);
+        for (size_t i = 0; i < requests.size(); ++i) {
+            TransferStatus status{};
+            ASSERT_TRUE(
+                transport_
+                    ->getTransferStatus(
+                        batch_, static_cast<int>(start_task + i), status)
+                    .ok());
+            EXPECT_EQ(status.s, TransferStatusEnum::COMPLETED);
+            EXPECT_EQ(status.transferred_bytes, requests[i].length);
+        }
+    }
 }
 
 TEST_F(MemFabricTransportTest, SubmitAndGetStatusCompleted) {
@@ -633,28 +685,28 @@ TEST_F(MemFabricTransportTest, QuiesceDrainsInflightBatches) {
     ASSERT_TRUE(
         transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
             .ok());
-    EXPECT_EQ(transport_->inflight_.load(), 1);
+    EXPECT_EQ(InflightCount(), 1);
 
     g_state->query_ret = SM_OK;
     g_state->batch_result = SM_OK;
     TransferStatus status{};
     ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
     EXPECT_EQ(status.s, TransferStatusEnum::COMPLETED);
-    EXPECT_EQ(transport_->inflight_.load(), 0);
+    EXPECT_EQ(InflightCount(), 0);
 
     ASSERT_TRUE(transport_->quiesce().ok());
 }
 
 TEST_F(MemFabricTransportTest, QuiesceTimeoutWithPendingBatches) {
     ASSERT_TRUE(Install().ok());
-    transport_->transfer_timeout_ms_ = 100;
+    SetTransferTimeout(100);
     ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
 
     char src[32]{};
     ASSERT_TRUE(
         transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
             .ok());
-    EXPECT_EQ(transport_->inflight_.load(), 1);
+    EXPECT_EQ(InflightCount(), 1);
 
     g_state->query_ret = SM_NEED_RETRY;
     TransferStatus status{};
@@ -667,7 +719,7 @@ TEST_F(MemFabricTransportTest, QuiesceTimeoutWithPendingBatches) {
                        std::chrono::steady_clock::now() - start)
                        .count();
     EXPECT_GE(elapsed, 90);
-    EXPECT_EQ(transport_->inflight_.load(), 1);
+    EXPECT_EQ(InflightCount(), 1);
 }
 
 TEST_F(MemFabricTransportTest, TimeoutBatchMapsToTimeout) {
@@ -689,7 +741,7 @@ TEST_F(MemFabricTransportTest, TimeoutBatchMapsToTimeout) {
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
     ASSERT_NE(mf_batch, nullptr);
     EXPECT_EQ(mf_batch->pending_batch_count, 0u);
-    EXPECT_EQ(transport_->inflight_.load(), 0);
+    EXPECT_EQ(InflightCount(), 0);
 }
 
 TEST_F(MemFabricTransportTest, InvalidParamMapsToInvalid) {
@@ -711,7 +763,7 @@ TEST_F(MemFabricTransportTest, InvalidParamMapsToInvalid) {
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
     ASSERT_NE(mf_batch, nullptr);
     EXPECT_EQ(mf_batch->pending_batch_count, 0u);
-    EXPECT_EQ(transport_->inflight_.load(), 0);
+    EXPECT_EQ(InflightCount(), 0);
 }
 
 TEST_F(MemFabricTransportTest, AddRemoveMemoryBuffer) {
