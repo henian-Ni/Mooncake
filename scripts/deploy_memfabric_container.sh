@@ -21,8 +21,9 @@ PY_SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev
 print_section "Staging build artifacts"
 rm -rf "$STAGING" && mkdir -p "$STAGING"
 
-# .py files (full set from mooncake-wheel)
-cp "$REPO"/mooncake-wheel/mooncake/*.py "$STAGING/"
+# .py files (full set from python/mooncake + mooncake-wheel)
+cp "$REPO"/python/mooncake/*.py "$STAGING/"
+cp "$REPO"/mooncake-wheel/mooncake/*.py "$STAGING/" 2>/dev/null || true
 cp "$REPO"/mooncake-wheel/mooncake/README.md "$STAGING/" 2>/dev/null || true
 
 # .so files (build output) — use glob to match any cpython tag
