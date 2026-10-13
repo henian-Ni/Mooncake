@@ -9,7 +9,7 @@ MemFabric 是华为提供的共享内存传输框架，基于 smem_trans API 实
 - **动态加载**：通过 dlopen/dlsym 加载 `libmf_smem.so`，编译时不依赖 memfabric 头文件
 - **批量传输**：支持 `smem_trans_batch_copy` 批量异步传输，减少调用开销
 - **TENT 集成**：作为 TENT transport 的一种，自动参与传输选择和故障切换
-- **多协议支持**：支持 `device_sdma`、`device_rdma`、`host_rdma` 等底层操作类型
+- **多协议支持**：支持 `device_rdma`、`device_urma`、`device_sdma`、等底层操作类型
 
 ### 工作原理
 

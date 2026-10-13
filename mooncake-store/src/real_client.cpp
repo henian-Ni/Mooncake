@@ -149,31 +149,6 @@ void *AllocateAscendStoreSegment(size_t segment_size,
 }
 #endif
 
-#ifdef USE_MEMFABRIC
-void *AllocateMemFabricStoreSegment(size_t segment_size,
-                                    const std::string &protocol,
-                                    bool use_hugepage, bool defer_hugetlb,
-                                    size_t *mapped_size) {
-    size_t actual_size = 0;
-    MemFabricHostAllocFn host_alloc = nullptr;
-    size_t host_align = 0;
-    size_t alloc_size = segment_size;
-    if (use_hugepage) {
-        host_align = get_hugepage_size_from_env();
-        alloc_size = align_up(segment_size, host_align);
-        host_alloc =
-            static_cast<MemFabricHostAllocFn>(allocate_buffer_mmap_memory);
-    }
-    void *ptr = memfabric_allocate_memory_best_effort(
-        alloc_size, protocol, &actual_size, host_alloc, host_align,
-        defer_hugetlb);
-    if (ptr != nullptr) {
-        *mapped_size = actual_size;
-    }
-    return ptr;
-}
-#endif
-
 std::shared_ptr<RegisteredPinnedRegion> TryPinStoreSegment(
     void *ptr, size_t size, const std::string &protocol,
     const char *segment_owner) {
@@ -364,6 +339,31 @@ tl::expected<void, ErrorCode> set_context_from_dummy_shms(
         }
     }
     return set_context_if_needed(protocol, device_id, action);
+}
+#endif
+
+#ifdef USE_MEMFABRIC
+void *AllocateMemFabricStoreSegment(size_t segment_size,
+                                    const std::string &protocol,
+                                    bool use_hugepage, bool defer_hugetlb,
+                                    size_t *mapped_size) {
+    size_t actual_size = 0;
+    MemFabricHostAllocFn host_alloc = nullptr;
+    size_t host_align = 0;
+    size_t alloc_size = segment_size;
+    if (use_hugepage) {
+        host_align = get_hugepage_size_from_env();
+        alloc_size = align_up(segment_size, host_align);
+        host_alloc =
+            static_cast<MemFabricHostAllocFn>(allocate_buffer_mmap_memory);
+    }
+    void *ptr = memfabric_allocate_memory_best_effort(
+        alloc_size, protocol, &actual_size, host_alloc, host_align,
+        defer_hugetlb);
+    if (ptr != nullptr) {
+        *mapped_size = actual_size;
+    }
+    return ptr;
 }
 #endif
 

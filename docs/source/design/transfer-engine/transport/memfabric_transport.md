@@ -9,7 +9,7 @@ MemFabric is a shared memory transport framework developed by Huawei, implementi
 - **Dynamic Loading**: Loads `libmf_smem.so` via dlopen/dlsym; no compile-time dependency on memfabric headers
 - **Batch Transfer**: Supports `smem_trans_batch_copy` for asynchronous batch transfer, reducing per-call overhead
 - **TENT Integration**: Participates in transport selection and failover as a TENT transport type
-- **Multi-Protocol**: Supports `device_sdma`, `device_rdma`, `host_rdma`, and other underlying operation types
+- **Multi-Protocol**: Supports `device_rdma`、`device_urma`、`device_sdma`, and other underlying operation types
 
 ### Architecture
 
