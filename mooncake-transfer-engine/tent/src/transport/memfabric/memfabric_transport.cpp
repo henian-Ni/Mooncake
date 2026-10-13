@@ -28,8 +28,8 @@ std::mutex MemFabricTransport::g_init_mutex_;
 MemFabricSubBatch::~MemFabricSubBatch() {
     if (pending_batch_count > 0)
         LOG(WARNING) << "~MemFabricSubBatch: " << pending_batch_count
-                     << " batch(es) still PENDING out of "
-                     << task_list.size() << " tasks";
+                     << " batch(es) still PENDING out of " << task_list.size()
+                     << " tasks";
 }
 
 MemFabricTransport::MemFabricTransport() = default;
@@ -42,7 +42,8 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     LOG(INFO) << "install: segment_name=" << local_segment_name;
 
     if (!MemFabricUnderApi::LoadLibrary()) {
-        LOG(ERROR) << "MemFabricUnderApi::LoadLibrary failed, libmf_smem.so unavailable";
+        LOG(ERROR) << "MemFabricUnderApi::LoadLibrary failed, libmf_smem.so "
+                      "unavailable";
         return Status::DeviceNotFound("libmf_smem.so unavailable" LOC_MARK);
     }
     LOG(INFO) << "LoadLibrary: ok";
@@ -67,8 +68,10 @@ Status MemFabricTransport::install(std::string& local_segment_name,
 
     auto log_level_str = conf->get("log_level", "info");
     int mf_log_level = 1;
-    if (log_level_str == "warning") mf_log_level = 2;
-    else if (log_level_str == "error") mf_log_level = 3;
+    if (log_level_str == "warning")
+        mf_log_level = 2;
+    else if (log_level_str == "error")
+        mf_log_level = 3;
     MemFabricUnderApi::SmemSetLogLevel(mf_log_level);
 
     int32_t device_id = 0;
@@ -83,7 +86,8 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         std::lock_guard<std::mutex> lock(g_init_mutex_);
         if (g_init_ref_.fetch_add(1) == 0) {
             auto ret = MemFabricUnderApi::SmemTransInit(device_id, 0);
-            LOG(INFO) << "smem_trans_init: ret=" << ret << ", ref=" << g_init_ref_.load();
+            LOG(INFO) << "smem_trans_init: ret=" << ret
+                      << ", ref=" << g_init_ref_.load();
             if (ret != 0) {
                 LOG(ERROR) << "smem_trans_init failed, ret=" << ret;
                 g_init_ref_.fetch_sub(1);
@@ -96,7 +100,8 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     if (MemFabricUnderApi::SmemTransConfigInit(&cfg) != 0) {
         LOG(ERROR) << "smem_trans_config_init failed";
         std::lock_guard<std::mutex> lock(g_init_mutex_);
-        if (g_init_ref_.fetch_sub(1) == 1) MemFabricUnderApi::SmemTransUninit(0);
+        if (g_init_ref_.fetch_sub(1) == 1)
+            MemFabricUnderApi::SmemTransUninit(0);
         return Status::InternalError("smem_trans_config_init failed" LOC_MARK);
     }
     cfg.role = SMEM_TRANS_BOTH;
@@ -118,8 +123,7 @@ Status MemFabricTransport::install(std::string& local_segment_name,
             LOG(INFO) << "RDMA mode: nic=" << cfg.nic;
         }
     }
-    LOG(INFO) << "trans config: url=" << cfg.url
-              << ", nic=" << cfg.nic
+    LOG(INFO) << "trans config: url=" << cfg.url << ", nic=" << cfg.nic
               << ", deviceId=" << cfg.deviceId
               << ", dataOpType=" << config_.data_op_type_str;
 
@@ -128,12 +132,14 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     if (!handle_) {
         LOG(ERROR) << "smem_trans_create returned null handle";
         std::lock_guard<std::mutex> lock(g_init_mutex_);
-        if (g_init_ref_.fetch_sub(1) == 1) MemFabricUnderApi::SmemTransUninit(0);
+        if (g_init_ref_.fetch_sub(1) == 1)
+            MemFabricUnderApi::SmemTransUninit(0);
         return Status::DeviceNotFound("smem_trans_create failed" LOC_MARK);
     }
 
     uint16_t actual_port = 0;
-    if (MemFabricUnderApi::SmemTransGetRpcPort(handle_, &actual_port) == 0 && actual_port != 0) {
+    if (MemFabricUnderApi::SmemTransGetRpcPort(handle_, &actual_port) == 0 &&
+        actual_port != 0) {
         char host_ip[64] = {};
         auto pos = local_segment_name.find(':');
         if (pos != std::string::npos) {
@@ -151,7 +157,8 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         MemFabricUnderApi::SmemTransDestroy(handle_, 0);
         handle_ = nullptr;
         std::lock_guard<std::mutex> lock(g_init_mutex_);
-        if (g_init_ref_.fetch_sub(1) == 1) MemFabricUnderApi::SmemTransUninit(0);
+        if (g_init_ref_.fetch_sub(1) == 1)
+            MemFabricUnderApi::SmemTransUninit(0);
         return Status::InternalError("smem_trans_get_port failed" LOC_MARK);
     }
 
@@ -160,7 +167,8 @@ Status MemFabricTransport::install(std::string& local_segment_name,
         MemFabricUnderApi::SmemTransDestroy(handle_, 0);
         handle_ = nullptr;
         std::lock_guard<std::mutex> lock(g_init_mutex_);
-        if (g_init_ref_.fetch_sub(1) == 1) MemFabricUnderApi::SmemTransUninit(0);
+        if (g_init_ref_.fetch_sub(1) == 1)
+            MemFabricUnderApi::SmemTransUninit(0);
         return s;
     }
 
@@ -203,13 +211,15 @@ Status MemFabricTransport::resolveDestUrl(const Request& request,
     return metadata_->segmentManager().withCachedSegment(
         request.target_id, pin, [&](SegmentDesc* desc) -> Status {
             if (!desc) {
-                LOG(ERROR) << "Segment not found for target_id=" << request.target_id;
+                LOG(ERROR) << "Segment not found for target_id="
+                           << request.target_id;
                 return Status::InvalidArgument("segment not found" LOC_MARK);
             }
             auto& detail = std::get<MemorySegmentDesc>(desc->detail);
             auto it = detail.device_attrs.find("memfabric_unique_id");
             if (it == detail.device_attrs.end() || it->second.empty()) {
-                LOG(ERROR) << "memfabric_unique_id missing for target_id=" << request.target_id;
+                LOG(ERROR) << "memfabric_unique_id missing for target_id="
+                           << request.target_id;
                 return Status::InvalidArgument(
                     "memfabric_unique_id missing for segment" LOC_MARK);
             }
@@ -218,7 +228,8 @@ Status MemFabricTransport::resolveDestUrl(const Request& request,
         });
 }
 
-Status MemFabricTransport::allocateSubBatch(SubBatchRef& batch, size_t max_size) {
+Status MemFabricTransport::allocateSubBatch(SubBatchRef& batch,
+                                            size_t max_size) {
     auto* mf_batch = new MemFabricSubBatch();
     mf_batch->handle = handle_;
     mf_batch->task_list.reserve(max_size);
@@ -267,7 +278,8 @@ Status MemFabricTransport::submitTransferTasks(
         bool is_write = true;
         for (uint32_t j = 0; j < batch_size; ++j) {
             const auto& req = request_list[indices[j]];
-            src_list[j] = const_cast<void*>(static_cast<const void*>(req.source));
+            src_list[j] =
+                const_cast<void*>(static_cast<const void*>(req.source));
             dest_list[j] = reinterpret_cast<void*>(req.target_offset);
             size_list[j] = req.length;
             is_write = (req.opcode == Request::WRITE);
@@ -284,7 +296,8 @@ Status MemFabricTransport::submitTransferTasks(
         params.flags = 0;
 
         uint64_t batch_id = 0;
-        auto ret = MemFabricUnderApi::SmemTransBatchCopy(handle_, &params, &batch_id);
+        auto ret =
+            MemFabricUnderApi::SmemTransBatchCopy(handle_, &params, &batch_id);
         if (ret != 0) {
             LOG(ERROR) << "smem_trans_batch_copy failed, ret=" << ret
                        << ", dest_url=" << dest_url
@@ -310,7 +323,7 @@ Status MemFabricTransport::submitTransferTasks(
 }
 
 Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
-                                              TransferStatus& status) {
+                                             TransferStatus& status) {
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch || task_id < 0 ||
         task_id >= static_cast<int>(mf_batch->task_list.size())) {
@@ -334,11 +347,13 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
         return Status::OK();
     }
 
-    auto ret = MemFabricUnderApi::SmemTransBatchStatusQuery(handle_, task.batch_id, 0);
+    auto ret =
+        MemFabricUnderApi::SmemTransBatchStatusQuery(handle_, task.batch_id, 0);
     VLOG(1) << "batch_status_query: batch_id=" << task.batch_id
             << ", ret=" << ret
-            << (ret == SMEM_TRANS_BATCH_DONE ? " (DONE)" :
-                ret == SMEM_TRANS_BATCH_PENDING ? " (PENDING)" : " (FAILED)");
+            << (ret == SMEM_TRANS_BATCH_DONE      ? " (DONE)"
+                : ret == SMEM_TRANS_BATCH_PENDING ? " (PENDING)"
+                                                  : " (FAILED)");
 
     TransferStatusEnum batch_status;
     if (ret == SMEM_TRANS_BATCH_DONE) {
@@ -352,8 +367,7 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
     }
 
     if (batch_status != TransferStatusEnum::PENDING) {
-        if (mf_batch->pending_batch_count > 0)
-            mf_batch->pending_batch_count--;
+        if (mf_batch->pending_batch_count > 0) mf_batch->pending_batch_count--;
         mf_batch->batch_status_cache[task.batch_id] = batch_status;
         for (auto& t : mf_batch->task_list) {
             if (t.batch_id == task.batch_id &&
@@ -372,12 +386,14 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
 Status MemFabricTransport::addMemoryBuffer(BufferDesc& desc,
                                            const MemoryOptions& options) {
     (void)options;
-    LOG(INFO) << "addMemoryBuffer: addr=" << desc.addr << ", length=" << desc.length;
+    LOG(INFO) << "addMemoryBuffer: addr=" << desc.addr
+              << ", length=" << desc.length;
     if (!handle_) {
         LOG(ERROR) << "addMemoryBuffer called before install";
         return Status::InternalError("not installed" LOC_MARK);
     }
-    auto ret = MemFabricUnderApi::SmemTransRegisterMem(handle_, reinterpret_cast<void*>(desc.addr), desc.length, 0);
+    auto ret = MemFabricUnderApi::SmemTransRegisterMem(
+        handle_, reinterpret_cast<void*>(desc.addr), desc.length, 0);
     if (ret != 0) {
         LOG(ERROR) << "smem_trans_register_mem failed, ret=" << ret
                    << ", addr=" << desc.addr << ", length=" << desc.length;
@@ -400,7 +416,8 @@ Status MemFabricTransport::addMemoryBuffer(std::vector<BufferDesc>& desc_list,
 Status MemFabricTransport::removeMemoryBuffer(BufferDesc& desc) {
     if (!handle_) return Status::OK();
     LOG(INFO) << "removeMemoryBuffer: addr=" << desc.addr;
-    (void)MemFabricUnderApi::SmemTransDeregisterMem(handle_, reinterpret_cast<void*>(desc.addr));
+    (void)MemFabricUnderApi::SmemTransDeregisterMem(
+        handle_, reinterpret_cast<void*>(desc.addr));
     return Status::OK();
 }
 

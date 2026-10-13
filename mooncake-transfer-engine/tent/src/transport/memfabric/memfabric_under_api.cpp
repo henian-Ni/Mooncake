@@ -18,23 +18,25 @@ smemTransCreateFunc MemFabricUnderApi::pSmemTransCreate = nullptr;
 smemTransDestroyFunc MemFabricUnderApi::pSmemTransDestroy = nullptr;
 smemTransGetRpcPortFunc MemFabricUnderApi::pSmemTransGetRpcPort = nullptr;
 smemTransRegisterMemFunc MemFabricUnderApi::pSmemTransRegisterMem = nullptr;
-smemTransBatchRegisterMemFunc MemFabricUnderApi::pSmemTransBatchRegisterMem = nullptr;
+smemTransBatchRegisterMemFunc MemFabricUnderApi::pSmemTransBatchRegisterMem =
+    nullptr;
 smemTransDeregisterMemFunc MemFabricUnderApi::pSmemTransDeregisterMem = nullptr;
 smemTransBatchCopyFunc MemFabricUnderApi::pSmemTransBatchCopy = nullptr;
-smemTransBatchStatusQueryFunc MemFabricUnderApi::pSmemTransBatchStatusQuery = nullptr;
-smemTransSetPeerDownCallbackFunc MemFabricUnderApi::pSmemTransSetPeerDownCallback = nullptr;
+smemTransBatchStatusQueryFunc MemFabricUnderApi::pSmemTransBatchStatusQuery =
+    nullptr;
+smemTransSetPeerDownCallbackFunc
+    MemFabricUnderApi::pSmemTransSetPeerDownCallback = nullptr;
 smemSetLogLevelFunc MemFabricUnderApi::pSmemSetLogLevel = nullptr;
 
-#define DL_LOAD_SYM(field, name)                                         \
-    do {                                                                 \
-        field = (decltype(field))dlsym(gLibHandle, name);                \
-        if (!field) {                                                    \
-            LOG(ERROR) << "Failed to dlsym " << name                     \
-                       << ": " << dlerror();                             \
-            dlclose(gLibHandle);                                         \
-            gLibHandle = nullptr;                                       \
-            return false;                                               \
-        }                                                                \
+#define DL_LOAD_SYM(field, name)                                           \
+    do {                                                                   \
+        field = (decltype(field))dlsym(gLibHandle, name);                  \
+        if (!field) {                                                      \
+            LOG(ERROR) << "Failed to dlsym " << name << ": " << dlerror(); \
+            dlclose(gLibHandle);                                           \
+            gLibHandle = nullptr;                                          \
+            return false;                                                  \
+        }                                                                  \
     } while (0)
 
 bool MemFabricUnderApi::LoadLibrary() {
@@ -58,7 +60,8 @@ bool MemFabricUnderApi::LoadLibrary() {
     DL_LOAD_SYM(pSmemTransDeregisterMem, "smem_trans_deregister_mem");
     DL_LOAD_SYM(pSmemTransBatchCopy, "smem_trans_batch_copy");
     DL_LOAD_SYM(pSmemTransBatchStatusQuery, "smem_trans_batch_status_query");
-    DL_LOAD_SYM(pSmemTransSetPeerDownCallback, "smem_trans_set_peer_down_callback");
+    DL_LOAD_SYM(pSmemTransSetPeerDownCallback,
+                "smem_trans_set_peer_down_callback");
     DL_LOAD_SYM(pSmemSetLogLevel, "smem_set_log_level");
 
     gLoaded = true;

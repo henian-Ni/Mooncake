@@ -48,14 +48,16 @@ typedef enum {
 } smem_trans_role_t;
 
 typedef struct {
-    smem_trans_role_t role;          /* transfer role */
-    uint32_t initTimeout;            /* func timeout, default 120 seconds */
-    uint32_t deviceId;               /* npu device id */
-    uint32_t flags;                  /* optional flags */
-    smem_bm_data_op_type dataOpType; /* data operation type; see smem_bm_data_op_type */
-    char nic[64];                    /* host NIC addr for host_rdma, format: tcp://ip:port */
-    char url[64];                    /* unique id of this instance, format: ip:port, port 0 means auto detection */
-    smem_tls_config hcomTlsConfig;   /* hcom TLS config for host_rdma */
+    smem_trans_role_t role; /* transfer role */
+    uint32_t initTimeout;   /* func timeout, default 120 seconds */
+    uint32_t deviceId;      /* npu device id */
+    uint32_t flags;         /* optional flags */
+    smem_bm_data_op_type
+        dataOpType; /* data operation type; see smem_bm_data_op_type */
+    char nic[64];   /* host NIC addr for host_rdma, format: tcp://ip:port */
+    char url[64];   /* unique id of this instance, format: ip:port, port 0 means
+                       auto detection */
+    smem_tls_config hcomTlsConfig; /* hcom TLS config for host_rdma */
 } smem_trans_config_t;
 
 typedef enum {
@@ -74,7 +76,8 @@ typedef struct {
     uint32_t flags;
 } smem_trans_batch_params_t;
 
-typedef void (*smem_trans_peer_down_callback_t)(const char *peerUniqueId, void *userData);
+typedef void (*smem_trans_peer_down_callback_t)(const char *peerUniqueId,
+                                                void *userData);
 
 #ifdef __cplusplus
 }

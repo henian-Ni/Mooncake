@@ -22,8 +22,7 @@
 namespace {
 
 thread_local int g_device_id = 0;
-thread_local aclrtContext g_context =
-    reinterpret_cast<aclrtContext>(0x10000);
+thread_local aclrtContext g_context = reinterpret_cast<aclrtContext>(0x10000);
 int g_device_count = 1;
 
 void ResetAcl() {
@@ -70,8 +69,7 @@ aclError aclrtPointerGetAttributes(const void* ptr,
     return ACL_ERROR_NONE;
 }
 
-aclError aclrtMalloc(void** devPtr, size_t size,
-                     aclrtMemMallocPolicy policy) {
+aclError aclrtMalloc(void** devPtr, size_t size, aclrtMemMallocPolicy policy) {
     (void)policy;
     *devPtr = std::malloc(size);
     return *devPtr != nullptr ? ACL_ERROR_NONE : 1;
@@ -157,8 +155,8 @@ int32_t mockSmemTransRegisterMem(smem_trans_t, void*, size_t, uint32_t) {
     return 0;
 }
 
-int32_t mockSmemTransBatchRegisterMem(smem_trans_t, void*[], size_t[],
-                                      uint32_t, uint32_t) {
+int32_t mockSmemTransBatchRegisterMem(smem_trans_t, void*[], size_t[], uint32_t,
+                                      uint32_t) {
     return 0;
 }
 
@@ -169,7 +167,7 @@ int32_t mockSmemTransDeregisterMem(smem_trans_t, void*) {
 }
 
 int32_t mockSmemTransBatchCopy(smem_trans_t, smem_trans_batch_params_t*,
-                                uint64_t* batchId) {
+                               uint64_t* batchId) {
     std::lock_guard<std::mutex> lock(g_state->mu);
     g_state->batch_copy_calls++;
     if (g_state->batch_copy_ret != 0) return g_state->batch_copy_ret;
@@ -184,8 +182,8 @@ int32_t mockSmemTransBatchStatusQuery(smem_trans_t, uint64_t, uint32_t) {
 }
 
 int32_t mockSmemTransSetPeerDownCallback(smem_trans_t,
-                                          smem_trans_peer_down_callback_t,
-                                          void*) {
+                                         smem_trans_peer_down_callback_t,
+                                         void*) {
     return 0;
 }
 
@@ -435,8 +433,7 @@ TEST_F(MemFabricTransportTest, SubmitFailsWhenBatchCopyFails) {
 
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
     ASSERT_EQ(mf_batch->task_list.size(), 1u);
-    EXPECT_EQ(mf_batch->task_list[0].status_word,
-              TransferStatusEnum::FAILED);
+    EXPECT_EQ(mf_batch->task_list[0].status_word, TransferStatusEnum::FAILED);
     EXPECT_EQ(mf_batch->pending_batch_count, 0u);
 }
 

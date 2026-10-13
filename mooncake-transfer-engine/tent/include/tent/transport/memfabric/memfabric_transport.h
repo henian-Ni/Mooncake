@@ -42,7 +42,8 @@ struct MemFabricSubBatch : public Transport::SubBatch {
 };
 
 class MemFabricTransport : public Transport {
-   friend class MemFabricTransportTest;
+    friend class MemFabricTransportTest;
+
    public:
     MemFabricTransport();
     ~MemFabricTransport() override;
@@ -57,8 +58,7 @@ class MemFabricTransport : public Transport {
     Status freeSubBatch(SubBatchRef& batch) override;
 
     Status submitTransferTasks(
-        SubBatchRef batch,
-        const std::vector<Request>& request_list) override;
+        SubBatchRef batch, const std::vector<Request>& request_list) override;
 
     Status getTransferStatus(SubBatchRef batch, int task_id,
                              TransferStatus& status) override;

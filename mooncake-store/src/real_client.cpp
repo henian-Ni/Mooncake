@@ -165,8 +165,8 @@ void *AllocateMemFabricStoreSegment(size_t segment_size,
             static_cast<MemFabricHostAllocFn>(allocate_buffer_mmap_memory);
     }
     void *ptr = memfabric_allocate_memory_best_effort(
-        alloc_size, protocol, &actual_size, host_alloc,
-        host_align, defer_hugetlb);
+        alloc_size, protocol, &actual_size, host_alloc, host_align,
+        defer_hugetlb);
     if (ptr != nullptr) {
         *mapped_size = actual_size;
     }
