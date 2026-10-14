@@ -24,8 +24,6 @@ smemTransDeregisterMemFunc MemFabricUnderApi::pSmemTransDeregisterMem = nullptr;
 smemTransBatchCopyFunc MemFabricUnderApi::pSmemTransBatchCopy = nullptr;
 smemTransBatchStatusQueryFunc MemFabricUnderApi::pSmemTransBatchStatusQuery =
     nullptr;
-smemTransSetPeerDownCallbackFunc
-    MemFabricUnderApi::pSmemTransSetPeerDownCallback = nullptr;
 smemSetLogLevelFunc MemFabricUnderApi::pSmemSetLogLevel = nullptr;
 
 #define DL_LOAD_SYM(field, name)                                           \
@@ -60,8 +58,6 @@ bool MemFabricUnderApi::LoadLibrary() {
     DL_LOAD_SYM(pSmemTransDeregisterMem, "smem_trans_deregister_mem");
     DL_LOAD_SYM(pSmemTransBatchCopy, "smem_trans_batch_copy");
     DL_LOAD_SYM(pSmemTransBatchStatusQuery, "smem_trans_batch_status_query");
-    DL_LOAD_SYM(pSmemTransSetPeerDownCallback,
-                "smem_trans_set_peer_down_callback");
     DL_LOAD_SYM(pSmemSetLogLevel, "smem_set_log_level");
 
     gLoaded = true;
@@ -83,7 +79,6 @@ void MemFabricUnderApi::CleanupLibrary() {
     pSmemTransDeregisterMem = nullptr;
     pSmemTransBatchCopy = nullptr;
     pSmemTransBatchStatusQuery = nullptr;
-    pSmemTransSetPeerDownCallback = nullptr;
     pSmemSetLogLevel = nullptr;
 
     if (gLibHandle) {

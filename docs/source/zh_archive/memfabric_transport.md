@@ -51,10 +51,10 @@ MemFabric 是华为提供的共享内存传输框架，基于 smem_trans API 实
 
 ### 安装 memfabric
 
-通过 PyPI 安装 memfabric wheel 包：
+安装由兼容版本构建的 memfabric wheel（`MEMFABRIC_WHEEL` 指向该文件）：
 
 ```bash
-pip install memfabric_hybrid==1.2.1  # 最新版本见 https://pypi.org/project/memfabric-hybrid/#files
+pip install "$MEMFABRIC_WHEEL"  # 必须支持下文约定的四参数查询 ABI
 ```
 
 安装后 `libmf_smem.so` 位于 Python site-packages 目录下。将其加入 `LD_LIBRARY_PATH`：
@@ -91,7 +91,7 @@ cmake --install build
 |------|------|--------|------|
 | `LD_LIBRARY_PATH` | 是 | — | 包含 `libmf_smem.so` 所在目录 |
 | `MF_PROTOCOL` | 是 | — | 传输协议：`device_sdma` / `device_rdma` / `host_rdma` / `device_urma` / `device_uboe` |
-| `MF_TRANSFER_TIMEOUT` | 否 | `10000` | 传输/quiesce 超时时间（毫秒） |
+| `MF_TRANSFER_TIMEOUT` | 否 | `10000` | quiesce 轮询超时时间（毫秒） |
 | `MC_USE_TENT` | 是 | — | 设为 `1` 启用 TENT 模式 |
 | `MC_TENT_CONF` | 是 | — | TENT 配置 JSON 文件路径，需包含 `transports/memfabric/enable: true` |
 | `MC_STORE_USE_HUGEPAGE` | 否 | — | 设为 `1` 启用 Store 大页分配（使用 Store 池化时建议开启） |
@@ -140,6 +140,13 @@ ctest --test-dir build -R 'memfabric' --output-on-failure
 | `SubmitAndGetStatusPending` | 传输进行中状态 |
 | `FailedBatchPropagatesToAllTasks` | 失败传播到同 batch 所有 task |
 | `PendingBatchDestructorWarning` | 析构时未完成 batch 告警 |
+| `QuiesceDrainsInflightBatches` | quiesce 无需外部查询线程即可轮询完成状态 |
+| `QuiesceTimeoutWithPendingBatches` | 超时保留待完成状态并继续拒绝新提交 |
+| `QuiesceSerializesWithAcceptedSubmission` | 已接受提交完成登记后才进入排空查询 |
+| `QuiesceAndExternalPollConsumeCompletionOnce` | 并发查询只消费一次终态结果 |
+| `QueryErrorPreservesPending` | 查询错误不转换为执行终态 |
+| `ExecutionRetryCodeIsTerminalFailure` | 区分查询返回值与执行结果 |
+| `MixedGroupsKeepIndependentResultsAndBytes` | 各分组独立记录状态和完成字节 |
 | `AddRemoveMemoryBuffer` | 内存注册/注销 |
 | `AddMemoryBufferFailsBeforeInstall` | 未安装时的错误处理 |
 | `SubmitFailsWhenBatchCopyFails` | batch_copy 失败时的错误处理 |
@@ -210,3 +217,26 @@ ls /sys/kernel/mm/hugepages/
 # 按需分配对应大小的页
 echo <页数> > /sys/kernel/mm/hugepages/hugepages-<页大小>kB/nr_hugepages
 ```
+
+
+## 完成状态约定
+
+适配层依赖带执行结果输出参数的四参数接口
+`smem_trans_batch_status_query(handle, batch_id, &result, flags)`，例如
+`trans@8d0dbbf9` 或兼容构建。旧三参数接口使用相同符号名，且软件版本号
+`1.3.0` 无法区分这两种 ABI；部署时必须配套使用兼容库，不能混用。
+
+`SM_NEED_RETRY` 表示未完成；`SM_OK` 必须表示结果可读取且该批次的全部内存访问
+已经停止，包括执行失败的情况。这是对底层的依赖约定，适配层无法仅从错误码
+推断设备访问已经结束。成功任务计入请求长度，失败任务计入零个确认成功字节；
+后者不表示目标内存未被部分修改，也不表示回滚。底层终态只查询一次，并在适配层缓存。
+
+查询本身失败时返回查询错误，任务保持 PENDING，待完成计数不变。
+
+`quiesce()` 拦截新提交，并在 `MF_TRANSFER_TIMEOUT` 到期前主动轮询在途任务，
+复用正常状态查询更新任务状态和 `inflight_`。提交与查询使用同一把锁，
+两轮查询之间的等待会释放锁。quiesce 返回后仍拒绝新提交，包括超时返回的情况。
+
+超时返回错误，但不会将待完成任务改为终态，也不会清空在途计数；后续查询或再次
+调用 quiesce 仍可确认完成。该超时不会取消底层操作，也无法抢占阻塞的底层调用。
+当前引擎记录 quiesce 错误后仍继续清理，因此超时不代表缓冲区和批次已经可以安全回收。

@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "memfabric_types.h"
@@ -78,6 +79,9 @@ class MemFabricTransport : public Transport {
     Status loadConfig(const std::shared_ptr<Config>& conf);
     Status publishLocalDevices();
     Status resolveDestUrl(const Request& request, std::string& dest_url) const;
+    // Caller holds inflight_mu_; shared by public polling and quiesce().
+    Status getTransferStatusLocked(SubBatchRef batch, int task_id,
+                                   TransferStatus& status);
 
     bool installed_{false};
     smem_trans_t handle_{nullptr};
@@ -87,6 +91,9 @@ class MemFabricTransport : public Transport {
 
     std::mutex inflight_mu_;
     std::condition_variable inflight_cv_;
+    // Non-owning batch index, protected together with submission and polling.
+    std::unordered_set<MemFabricSubBatch*> batches_;
+    bool stopping_ = false;
     std::atomic<int> inflight_{0};
     int32_t transfer_timeout_ms_{10000};
 

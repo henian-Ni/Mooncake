@@ -1,6 +1,7 @@
 #include "tent/transport/memfabric/memfabric_transport.h"
 
 #include <acl/acl.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
@@ -227,6 +228,10 @@ Status MemFabricTransport::install(std::string& local_segment_name,
     caps.gpu_to_dram = true;
     caps.gpu_to_gpu = true;
 
+    {
+        std::lock_guard<std::mutex> lock(inflight_mu_);
+        stopping_ = false;
+    }
     installed_ = true;
     LOG(INFO) << "MemFabricTransport installed: url=" << config_.store_url
               << ", dataOpType=" << config_.data_op_type_str;
@@ -279,19 +284,26 @@ Status MemFabricTransport::resolveDestUrl(const Request& request,
 
 Status MemFabricTransport::allocateSubBatch(SubBatchRef& batch,
                                             size_t max_size) {
-    auto* mf_batch = new MemFabricSubBatch();
+    std::lock_guard<std::mutex> lock(inflight_mu_);
+    if (stopping_)
+        return Status::InternalError(
+            "MemFabric transport is stopping" LOC_MARK);
+    auto mf_batch = std::make_unique<MemFabricSubBatch>();
     mf_batch->handle = handle_;
     mf_batch->task_list.reserve(max_size);
-    batch = mf_batch;
+    batches_.insert(mf_batch.get());
+    batch = mf_batch.release();
     return Status::OK();
 }
 
 Status MemFabricTransport::freeSubBatch(SubBatchRef& batch) {
+    std::lock_guard<std::mutex> lock(inflight_mu_);
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch) {
         LOG(ERROR) << "Invalid sub-batch type in freeSubBatch";
         return Status::InvalidArgument("invalid sub-batch" LOC_MARK);
     }
+    batches_.erase(mf_batch);
     delete mf_batch;
     batch = nullptr;
     return Status::OK();
@@ -299,6 +311,10 @@ Status MemFabricTransport::freeSubBatch(SubBatchRef& batch) {
 
 Status MemFabricTransport::submitTransferTasks(
     SubBatchRef batch, const std::vector<Request>& request_list) {
+    std::lock_guard<std::mutex> lock(inflight_mu_);
+    if (stopping_)
+        return Status::InternalError(
+            "MemFabric transport is stopping" LOC_MARK);
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch) {
         LOG(ERROR) << "Invalid sub-batch type in submitTransferTasks";
@@ -378,6 +394,13 @@ Status MemFabricTransport::submitTransferTasks(
 
 Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
                                              TransferStatus& status) {
+    std::lock_guard<std::mutex> lock(inflight_mu_);
+    return getTransferStatusLocked(batch, task_id, status);
+}
+
+Status MemFabricTransport::getTransferStatusLocked(SubBatchRef batch,
+                                                   int task_id,
+                                                   TransferStatus& status) {
     auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch);
     if (!mf_batch || task_id < 0 ||
         task_id >= static_cast<int>(mf_batch->task_list.size())) {
@@ -406,6 +429,11 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
         handle_, task.batch_id, &batch_result, 0);
     VLOG(1) << "batch_status_query: batch_id=" << task.batch_id
             << ", query_ret=" << query_ret << ", batch_result=" << batch_result;
+
+    if (query_ret != SM_OK && query_ret != SM_NEED_RETRY) {
+        status = TransferStatus{TransferStatusEnum::PENDING, 0};
+        return Status::InternalError("MemFabric completion unknown" LOC_MARK);
+    }
 
     TransferStatusEnum batch_status = mapBatchStatus(query_ret, batch_result);
     if (batch_status != TransferStatusEnum::PENDING &&
@@ -483,13 +511,35 @@ Status MemFabricTransport::quiesce() {
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(transfer_timeout_ms_);
     std::unique_lock<std::mutex> lock(inflight_mu_);
+    stopping_ = true;
     while (inflight_.load(std::memory_order_acquire) > 0) {
-        if (inflight_cv_.wait_until(lock, deadline) ==
-            std::cv_status::timeout) {
+        if (std::chrono::steady_clock::now() >= deadline) {
             LOG(WARNING) << "MemFabricTransport quiesce timed out with "
                          << inflight_.load() << " in-flight batches";
-            break;
+            return Status::InternalError(
+                "MemFabric quiesce timed out" LOC_MARK);
         }
+        for (auto* batch : batches_) {
+            if (std::chrono::steady_clock::now() >= deadline) break;
+            if (batch->pending_batch_count == 0) continue;
+            for (size_t i = 0; i < batch->task_list.size(); ++i) {
+                if (std::chrono::steady_clock::now() >= deadline) break;
+                if (batch->task_list[i].status_word !=
+                    TransferStatusEnum::PENDING)
+                    continue;
+                TransferStatus status{};
+                // Query errors leave the task pending; retry until the
+                // deadline.
+                (void)getTransferStatusLocked(batch, static_cast<int>(i),
+                                              status);
+            }
+        }
+        if (inflight_.load(std::memory_order_acquire) == 0) break;
+        // Release the lock between polls so normal status queries and batch
+        // release can proceed. Submission remains blocked by stopping_.
+        inflight_cv_.wait_until(
+            lock, std::min(deadline, std::chrono::steady_clock::now() +
+                                         std::chrono::milliseconds(1)));
     }
     return Status::OK();
 }

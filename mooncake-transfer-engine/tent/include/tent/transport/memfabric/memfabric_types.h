@@ -94,9 +94,6 @@ typedef struct {
     uint32_t flags;
 } smem_trans_batch_params_t;
 
-typedef void (*smem_trans_peer_down_callback_t)(const char *peerUniqueId,
-                                                void *userData);
-
 #ifdef __cplusplus
 }
 #endif

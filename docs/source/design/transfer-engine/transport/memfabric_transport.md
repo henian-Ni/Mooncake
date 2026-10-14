@@ -51,10 +51,10 @@ MemFabric is a shared memory transport framework developed by Huawei, implementi
 
 ### Installing memfabric
 
-Install the memfabric wheel package from PyPI:
+Set `MEMFABRIC_WHEEL` to the wheel built from a compatible MemFabric revision:
 
 ```bash
-pip install memfabric_hybrid==1.2.1  # See https://pypi.org/project/memfabric-hybrid/#files for the latest version
+pip install "$MEMFABRIC_WHEEL"  # Wheel built with the compatible query ABI below
 ```
 
 After installation, `libmf_smem.so` is placed in the Python site-packages
@@ -93,7 +93,7 @@ cmake --install build
 |----------|----------|---------|-------------|
 | `LD_LIBRARY_PATH` | Yes | — | Directory containing `libmf_smem.so` |
 | `MF_PROTOCOL` | Yes | — | Transport protocol: `device_sdma` / `device_rdma` / `host_rdma` / `device_urma` / `device_uboe` |
-| `MF_TRANSFER_TIMEOUT` | No | `10000` | Transfer/quiesce timeout in milliseconds |
+| `MF_TRANSFER_TIMEOUT` | No | `10000` | Quiesce polling timeout in milliseconds |
 | `MC_USE_TENT` | Yes | — | Set to `1` to enable TENT mode |
 | `MC_TENT_CONF` | Yes | — | Path to TENT config JSON file; must include `transports/memfabric/enable: true` |
 | `MC_STORE_USE_HUGEPAGE` | No | — | Set to `1` to enable Store hugepage allocation (recommended when using Store pooling) |
@@ -142,11 +142,49 @@ Test coverage:
 | `SubmitAndGetStatusPending` | Transfer in-progress status |
 | `FailedBatchPropagatesToAllTasks` | Failure propagation to all tasks in the same batch |
 | `PendingBatchDestructorWarning` | Destructor warning for incomplete batches |
+| `QuiesceDrainsInflightBatches` | Quiesce polls completion without an external polling thread |
+| `QuiesceTimeoutWithPendingBatches` | Timeout preserves pending state and keeps new submissions blocked |
+| `QuiesceSerializesWithAcceptedSubmission` | An accepted submission is tracked before quiesce polls it |
+| `QuiesceAndExternalPollConsumeCompletionOnce` | Concurrent polling consumes each terminal result once |
+| `QueryErrorPreservesPending` | Query errors do not become execution results |
+| `ExecutionRetryCodeIsTerminalFailure` | Query return codes and execution results have distinct meanings |
+| `MixedGroupsKeepIndependentResultsAndBytes` | Execution failures do not change other groups or count successful bytes |
 | `AddRemoveMemoryBuffer` | Memory registration/deregistration |
 | `AddMemoryBufferFailsBeforeInstall` | Error handling when not installed |
 | `SubmitFailsWhenBatchCopyFails` | Error handling when batch_copy fails |
 
 Tests use mock ACL functions and mock `MemFabricUnderApi`; no real memfabric hardware required.
+
+### Completion contract
+
+Use a MemFabric build with the four-argument
+`smem_trans_batch_status_query(handle, batch_id, &result, flags)` ABI, such as
+`trans@8d0dbbf9`, or a compatible build. The old three-argument API uses the same
+symbol name; the package version `1.3.0` alone does not distinguish these builds.
+Deploy matching libraries and headers; this adapter does not support the old ABI.
+
+`SM_NEED_RETRY` means pending. `SM_OK` means the execution result is available
+and **all memory accesses by that batch have stopped**, even if `result` reports
+failure. This is a required backend contract, not something the adapter can
+infer from an error code. Only a successful execution counts transferred bytes.
+A failed batch can have partially modified memory; zero confirmed bytes does
+not imply rollback.
+
+Queries consume the backend result once. The adapter caches each terminal result
+for all tasks in that vendor batch. A query error is returned to the caller and
+leaves tasks pending without decrementing the pending count.
+
+`quiesce()` stops new submissions and polls outstanding tasks until their results
+are available or `MF_TRANSFER_TIMEOUT` expires. It reuses normal status handling
+to update task states and the in-flight count. Polling and submission are
+serialized; the polling wait releases the lock between iterations. Submission
+remains disabled after quiesce returns, including after a timeout.
+
+A timeout returns an error without completing pending tasks or clearing their
+in-flight count. A later query or quiesce call can still observe completion.
+The timeout does not cancel backend operations or preempt a blocked backend
+call. The engine currently logs quiesce errors and continues teardown, so a
+timeout is not proof that buffers and batches are safe to reclaim.
 
 ## Important Notes
 

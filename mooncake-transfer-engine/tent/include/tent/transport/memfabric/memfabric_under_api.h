@@ -26,8 +26,6 @@ using smemTransBatchCopyFunc = int32_t (*)(smem_trans_t,
                                            uint64_t*);
 using smemTransBatchStatusQueryFunc = int32_t (*)(smem_trans_t, uint64_t,
                                                   int32_t*, uint32_t);
-using smemTransSetPeerDownCallbackFunc =
-    int32_t (*)(smem_trans_t, smem_trans_peer_down_callback_t, void*);
 using smemSetLogLevelFunc = int32_t (*)(int);
 
 class MemFabricUnderApi {
@@ -95,12 +93,6 @@ class MemFabricUnderApi {
         if (pSmemTransBatchStatusQuery == nullptr) return -1;
         return pSmemTransBatchStatusQuery(handle, batchId, result, flags);
     }
-    static inline int32_t SmemTransSetPeerDownCallback(
-        smem_trans_t handle, smem_trans_peer_down_callback_t callback,
-        void* userData) {
-        if (pSmemTransSetPeerDownCallback == nullptr) return -1;
-        return pSmemTransSetPeerDownCallback(handle, callback, userData);
-    }
     static inline int32_t SmemSetLogLevel(int level) {
         if (pSmemSetLogLevel == nullptr) return -1;
         return pSmemSetLogLevel(level);
@@ -122,7 +114,6 @@ class MemFabricUnderApi {
     static smemTransDeregisterMemFunc pSmemTransDeregisterMem;
     static smemTransBatchCopyFunc pSmemTransBatchCopy;
     static smemTransBatchStatusQueryFunc pSmemTransBatchStatusQuery;
-    static smemTransSetPeerDownCallbackFunc pSmemTransSetPeerDownCallback;
     static smemSetLogLevelFunc pSmemSetLogLevel;
 };
 
