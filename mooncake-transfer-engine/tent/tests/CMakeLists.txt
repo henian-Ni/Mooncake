@@ -826,7 +826,8 @@ if(USE_MEMFABRIC)
   target_link_libraries(tent_memfabric_transport_test
                         PRIVATE gtest gtest_main tent_link_group)
   target_include_directories(tent_memfabric_transport_test
-                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
+                                     ${CMAKE_CURRENT_SOURCE_DIR}/mock_acl)
   add_test(NAME tent_memfabric_transport_test
            COMMAND tent_memfabric_transport_test)
 endif()
