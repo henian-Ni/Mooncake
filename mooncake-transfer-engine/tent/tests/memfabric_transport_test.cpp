@@ -112,7 +112,8 @@ struct MockMemFabricState {
     int32_t deregister_ret = 0;
     int set_log_level_calls = 0;
     std::atomic<uint64_t> next_batch_id{1};
-    int32_t status_query_result = SMEM_TRANS_BATCH_DONE;
+    int32_t query_ret = SM_OK;
+    int32_t batch_result = SM_OK;
     int32_t batch_copy_ret = 0;
     int32_t get_rpc_port_ret = 0;
     uint16_t rpc_port = 12345;
@@ -189,10 +190,12 @@ int32_t mockSmemTransBatchCopy(smem_trans_t, smem_trans_batch_params_t* params,
     return 0;
 }
 
-int32_t mockSmemTransBatchStatusQuery(smem_trans_t, uint64_t, uint32_t) {
+int32_t mockSmemTransBatchStatusQuery(smem_trans_t, uint64_t, int32_t* result,
+                                      uint32_t) {
     std::lock_guard<std::mutex> lock(g_state->mu);
     g_state->status_query_calls++;
-    return g_state->status_query_result;
+    if (result) *result = g_state->batch_result;
+    return g_state->query_ret;
 }
 
 int32_t mockSmemTransSetPeerDownCallback(smem_trans_t,
@@ -452,7 +455,8 @@ TEST_F(MemFabricTransportTest, SubmitAndGetStatusCompleted) {
     ASSERT_NE(mf_batch, nullptr);
     EXPECT_EQ(mf_batch->pending_batch_count, 1u);
 
-    g_state->status_query_result = SMEM_TRANS_BATCH_DONE;
+    g_state->query_ret = SM_OK;
+    g_state->batch_result = SM_OK;
 
     TransferStatus status0{};
     ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status0).ok());
@@ -478,7 +482,7 @@ TEST_F(MemFabricTransportTest, SubmitAndGetStatusPending) {
         transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
             .ok());
 
-    g_state->status_query_result = SMEM_TRANS_BATCH_PENDING;
+    g_state->query_ret = SM_NEED_RETRY;
 
     TransferStatus status{};
     ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
@@ -525,7 +529,7 @@ TEST_F(MemFabricTransportTest, InvalidDestinationPreservesExistingTasks) {
     ASSERT_TRUE(
         transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x2000, 16)})
             .ok());
-    state_->status_query_result = SMEM_TRANS_BATCH_PENDING;
+    state_->query_ret = SM_NEED_RETRY;
     ASSERT_TRUE(transport_->getTransferStatus(batch_, 1, status).ok());
     ASSERT_EQ(status.s, TransferStatusEnum::PENDING);
 
@@ -568,7 +572,8 @@ TEST_F(MemFabricTransportTest, InvalidDestinationPreservesExistingTasks) {
     EXPECT_EQ(state_->batch_copy_calls, original_copy_calls + 1);
     EXPECT_EQ(mf_batch->pending_batch_count, original_pending + 1);
 
-    state_->status_query_result = SMEM_TRANS_BATCH_DONE;
+    state_->query_ret = SM_OK;
+    state_->batch_result = SM_OK;
     const size_t expected_bytes[] = {32, 16, 8};
     for (int task_id = 0; task_id < 3; ++task_id) {
         ASSERT_TRUE(
@@ -588,7 +593,8 @@ TEST_F(MemFabricTransportTest, FailedBatchPropagatesToAllTasks) {
                                      MakeWrite(src, 0x2000, 32)};
     ASSERT_TRUE(transport_->submitTransferTasks(batch_, requests).ok());
 
-    g_state->status_query_result = -2000;
+    g_state->query_ret = SM_OK;
+    g_state->batch_result = SM_ERROR;
 
     TransferStatus status0{};
     ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status0).ok());
@@ -629,7 +635,8 @@ TEST_F(MemFabricTransportTest, QuiesceDrainsInflightBatches) {
             .ok());
     EXPECT_EQ(transport_->inflight_.load(), 1);
 
-    g_state->status_query_result = SMEM_TRANS_BATCH_DONE;
+    g_state->query_ret = SM_OK;
+    g_state->batch_result = SM_OK;
     TransferStatus status{};
     ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
     EXPECT_EQ(status.s, TransferStatusEnum::COMPLETED);
@@ -649,7 +656,7 @@ TEST_F(MemFabricTransportTest, QuiesceTimeoutWithPendingBatches) {
             .ok());
     EXPECT_EQ(transport_->inflight_.load(), 1);
 
-    g_state->status_query_result = SMEM_TRANS_BATCH_PENDING;
+    g_state->query_ret = SM_NEED_RETRY;
     TransferStatus status{};
     ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
     EXPECT_EQ(status.s, TransferStatusEnum::PENDING);
@@ -661,6 +668,50 @@ TEST_F(MemFabricTransportTest, QuiesceTimeoutWithPendingBatches) {
                        .count();
     EXPECT_GE(elapsed, 90);
     EXPECT_EQ(transport_->inflight_.load(), 1);
+}
+
+TEST_F(MemFabricTransportTest, TimeoutBatchMapsToTimeout) {
+    ASSERT_TRUE(Install().ok());
+    ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
+
+    char src[32]{};
+    ASSERT_TRUE(
+        transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
+            .ok());
+
+    g_state->query_ret = SM_OK;
+    g_state->batch_result = SM_TIMEOUT;
+
+    TransferStatus status{};
+    ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
+    EXPECT_EQ(status.s, TransferStatusEnum::TIMEOUT);
+
+    auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
+    ASSERT_NE(mf_batch, nullptr);
+    EXPECT_EQ(mf_batch->pending_batch_count, 0u);
+    EXPECT_EQ(transport_->inflight_.load(), 0);
+}
+
+TEST_F(MemFabricTransportTest, InvalidParamMapsToInvalid) {
+    ASSERT_TRUE(Install().ok());
+    ASSERT_TRUE(transport_->allocateSubBatch(batch_, 4).ok());
+
+    char src[32]{};
+    ASSERT_TRUE(
+        transport_->submitTransferTasks(batch_, {MakeWrite(src, 0x1000, 32)})
+            .ok());
+
+    g_state->query_ret = SM_OK;
+    g_state->batch_result = SM_INVALID_PARAM;
+
+    TransferStatus status{};
+    ASSERT_TRUE(transport_->getTransferStatus(batch_, 0, status).ok());
+    EXPECT_EQ(status.s, TransferStatusEnum::INVALID);
+
+    auto* mf_batch = dynamic_cast<MemFabricSubBatch*>(batch_);
+    ASSERT_NE(mf_batch, nullptr);
+    EXPECT_EQ(mf_batch->pending_batch_count, 0u);
+    EXPECT_EQ(transport_->inflight_.load(), 0);
 }
 
 TEST_F(MemFabricTransportTest, AddRemoveMemoryBuffer) {

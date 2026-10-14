@@ -25,7 +25,7 @@ using smemTransBatchCopyFunc = int32_t (*)(smem_trans_t,
                                            smem_trans_batch_params_t*,
                                            uint64_t*);
 using smemTransBatchStatusQueryFunc = int32_t (*)(smem_trans_t, uint64_t,
-                                                  uint32_t);
+                                                  int32_t*, uint32_t);
 using smemTransSetPeerDownCallbackFunc =
     int32_t (*)(smem_trans_t, smem_trans_peer_down_callback_t, void*);
 using smemSetLogLevelFunc = int32_t (*)(int);
@@ -90,9 +90,10 @@ class MemFabricUnderApi {
     }
     static inline int32_t SmemTransBatchStatusQuery(smem_trans_t handle,
                                                     uint64_t batchId,
+                                                    int32_t* result,
                                                     uint32_t flags) {
         if (pSmemTransBatchStatusQuery == nullptr) return -1;
-        return pSmemTransBatchStatusQuery(handle, batchId, flags);
+        return pSmemTransBatchStatusQuery(handle, batchId, result, flags);
     }
     static inline int32_t SmemTransSetPeerDownCallback(
         smem_trans_t handle, smem_trans_peer_down_callback_t callback,

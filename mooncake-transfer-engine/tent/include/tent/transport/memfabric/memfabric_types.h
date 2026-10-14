@@ -12,6 +12,27 @@ extern "C" {
 #define SMEM_TLS_PATH_SIZE 256
 
 typedef enum {
+    SM_OK = 0,
+    SM_ERROR = -1,
+    SM_INVALID_PARAM = -2000,
+    SM_MALLOC_FAILED = -2001,
+    SM_NEW_OBJECT_FAILED = -2002,
+    SM_NOT_STARTED = -2003,
+    SM_TIMEOUT = -2004,
+    SM_REPEAT_CALL = -2005,
+    SM_DUPLICATED_OBJECT = -2006,
+    SM_OBJECT_NOT_EXISTS = -2007,
+    SM_NOT_INITIALIZED = -2008,
+    SM_RESOURCE_IN_USE = -2009,
+    SM_RECONNECT = -2010,
+    SM_GET_OBJIECT = -2011,
+    SM_PARTIAL_FAILED = -2012,
+    SM_INNER_BUSY = -2013,
+    SM_NOT_CONNECTED = -2014,
+    SM_NEED_RETRY = -2015,
+} SMErrorCode;
+
+typedef enum {
     SMEMB_DATA_OP_SDMA = 1U << 0,
     SMEMB_DATA_OP_HOST_RDMA = 1U << 1,
     SMEMB_DATA_OP_HOST_TCP = 1U << 2,
@@ -33,9 +54,6 @@ typedef struct {
     char packagePath[SMEM_TLS_PATH_SIZE];
     char decrypterLibPath[SMEM_TLS_PATH_SIZE];
 } smem_tls_config;
-
-#define SMEM_TRANS_BATCH_DONE (0)
-#define SMEM_TRANS_BATCH_PENDING (1)
 
 typedef void *smem_trans_t;
 

@@ -25,6 +25,21 @@ std::optional<smem_bm_data_op_type> parseDataOpType(const std::string& str) {
     return std::nullopt;
 }
 
+TransferStatusEnum mapBatchStatus(int32_t query_ret, int32_t batch_result) {
+    if (query_ret == SM_NEED_RETRY) return TransferStatusEnum::PENDING;
+    if (query_ret != SM_OK) return TransferStatusEnum::FAILED;
+    switch (static_cast<SMErrorCode>(batch_result)) {
+        case SM_OK:
+            return TransferStatusEnum::COMPLETED;
+        case SM_TIMEOUT:
+            return TransferStatusEnum::TIMEOUT;
+        case SM_INVALID_PARAM:
+            return TransferStatusEnum::INVALID;
+        default:
+            return TransferStatusEnum::FAILED;
+    }
+}
+
 }  // namespace
 
 std::atomic<int> MemFabricTransport::g_init_ref_{0};
@@ -386,23 +401,19 @@ Status MemFabricTransport::getTransferStatus(SubBatchRef batch, int task_id,
         return Status::OK();
     }
 
-    auto ret =
-        MemFabricUnderApi::SmemTransBatchStatusQuery(handle_, task.batch_id, 0);
+    int32_t batch_result = 0;
+    auto query_ret = MemFabricUnderApi::SmemTransBatchStatusQuery(
+        handle_, task.batch_id, &batch_result, 0);
     VLOG(1) << "batch_status_query: batch_id=" << task.batch_id
-            << ", ret=" << ret
-            << (ret == SMEM_TRANS_BATCH_DONE      ? " (DONE)"
-                : ret == SMEM_TRANS_BATCH_PENDING ? " (PENDING)"
-                                                  : " (FAILED)");
+            << ", query_ret=" << query_ret << ", batch_result=" << batch_result;
 
-    TransferStatusEnum batch_status;
-    if (ret == SMEM_TRANS_BATCH_DONE) {
-        batch_status = TransferStatusEnum::COMPLETED;
-    } else if (ret == SMEM_TRANS_BATCH_PENDING) {
-        batch_status = TransferStatusEnum::PENDING;
-    } else {
-        LOG(WARNING) << "smem_trans_batch_status_query error, ret=" << ret
-                     << ", batch_id=" << task.batch_id;
-        batch_status = TransferStatusEnum::FAILED;
+    TransferStatusEnum batch_status = mapBatchStatus(query_ret, batch_result);
+    if (batch_status != TransferStatusEnum::PENDING &&
+        batch_status != TransferStatusEnum::COMPLETED) {
+        LOG(WARNING) << "smem_trans_batch_status_query: query_ret=" << query_ret
+                     << ", batch_result=" << batch_result
+                     << ", batch_id=" << task.batch_id
+                     << ", mapped=" << static_cast<int>(batch_status);
     }
 
     if (batch_status != TransferStatusEnum::PENDING) {
