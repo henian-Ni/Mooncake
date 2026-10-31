@@ -113,7 +113,8 @@ jobs:
           export CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}"
           source /usr/local/Ascend/cann/set_env.sh
           export PATH="/usr/local/go/bin:${PATH}"
-          cmake --build build -j"$(nproc)"
+          # Match the NPU release's two-job limit for memory-heavy Store builds.
+          cmake --build build --parallel 2
           sudo cmake --install build
 
       - name: Generate Python version tag
