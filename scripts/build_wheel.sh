@@ -467,6 +467,17 @@ if [ "$NPU_BUILD" = "1" ]; then
     find "$WHEEL_PACKAGE_DIR" -type f -exec sh -c 'file "$1" | grep -q ELF' _ {} \; -print0 | xargs -0 patchelf --force-rpath --set-rpath '$ORIGIN'
 fi
 
+# Prioritize the package directory for sibling-library lookup while preserving
+# build-time dependency paths needed by auditwheel.
+if [ "${MEMFABRIC_BUILD:-0}" = "1" ]; then
+    echo "Prioritizing package-local RPATH for memfabric ELF files..."
+    while IFS= read -r -d '' elf_file; do
+        existing_rpath=$(patchelf --print-rpath "$elf_file")
+        patchelf --set-rpath "\$ORIGIN${existing_rpath:+:$existing_rpath}" "$elf_file"
+    done < <(find "$WHEEL_PACKAGE_DIR" -type f \
+        -exec sh -c 'file "$1" | grep -q ELF' _ {} \; -print0)
+fi
+
 # Create directory for repaired wheels
 REPAIRED_DIR="repaired_wheels_${PYTHON_VERSION}"
 mkdir -p ${REPAIRED_DIR}
