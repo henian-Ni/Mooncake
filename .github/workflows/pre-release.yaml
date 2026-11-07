@@ -214,6 +214,17 @@ jobs:
           name: mooncake-npu-wheel-pre-release-${{ matrix.arch }}-py${{ steps.generate_tag_release.outputs.python_version_tag }}
           path: mooncake-wheel/dist-npu-py${{ steps.generate_tag_release.outputs.python_version_tag }}/*.whl
 
+  build-memfabric:
+    name: Build Memfabric wheels
+    needs: version-stamp
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_build-memfabric-wheel.yaml
+    with:
+      # Keep these artifacts out of the core 'mooncake-wheel*pre-release*' set.
+      artifact-prefix: mooncake-memfabric-wheel-pre-release
+      version-override: ${{ needs.version-stamp.outputs.package_version }}
+
   publish-github-release:
     name: Upload wheels to GitHub Pre-release
     needs: build
@@ -389,6 +400,84 @@ jobs:
 
       - name: Publish NPU wheels to TestPyPI
         if: env.PUBLISH_NPU == 'yes'
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TESTPYPI_API_TOKEN }}
+        run: >-
+          twine upload --repository testpypi --skip-existing
+          mooncake-wheel/dist-release/*.whl
+
+  publish-memfabric-wheels:
+    name: Publish Memfabric wheels (best-effort)
+    needs: [build-memfabric, publish-github-release]
+    # Wait for all build legs, then publish successful wheels even if some failed.
+    if: ${{ !cancelled() && needs.publish-github-release.result == 'success' }}
+    runs-on: ubuntu-22.04
+    environment: nightly
+    concurrency:
+      group: pre-release-memfabric-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Download Memfabric wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: mooncake-wheel/dist-memfabric
+          pattern: mooncake-memfabric-wheel-pre-release-*
+          merge-multiple: true
+
+      - name: Collect Memfabric wheels and check coverage
+        run: |
+          set -euo pipefail
+          mkdir -p mooncake-wheel/dist-memfabric mooncake-wheel/dist-release
+          find mooncake-wheel/dist-memfabric -name "*.whl" -exec cp {} mooncake-wheel/dist-release/ \;
+          count=$(find mooncake-wheel/dist-release -name "*.whl" | wc -l)
+          echo "Collected ${count} Memfabric wheel(s):"
+          find mooncake-wheel/dist-release -name "*.whl" -exec ls -la {} \;
+          if [ "${count}" -eq 0 ]; then
+            echo "::warning::No Memfabric wheels were produced; skipping Memfabric publication."
+            echo "PUBLISH_MEMFABRIC=no" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "PUBLISH_MEMFABRIC=yes" >> "$GITHUB_ENV"
+          if [ "${count}" -lt 10 ]; then
+            echo "::warning::Partial Memfabric wheel set (${count}/10 expected for 2 arches x 5 Pythons); publishing what exists."
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Require TestPyPI credentials
+        if: env.PUBLISH_MEMFABRIC == 'yes'
+        env:
+          TESTPYPI_API_TOKEN: ${{ secrets.TESTPYPI_API_TOKEN }}
+        run: |
+          if [ -z "$TESTPYPI_API_TOKEN" ]; then
+            echo "TESTPYPI_API_TOKEN is required"
+            exit 1
+          fi
+
+      - name: Validate Memfabric wheels with twine
+        if: env.PUBLISH_MEMFABRIC == 'yes'
+        run: |
+          python -m pip install twine
+          twine check mooncake-wheel/dist-release/*.whl
+
+      - name: Append Memfabric wheels to GitHub Pre-release
+        if: env.PUBLISH_MEMFABRIC == 'yes'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: true
+          make_latest: false
+          files: mooncake-wheel/dist-release/*.whl
+          fail_on_unmatched_files: true
+
+      - name: Publish Memfabric wheels to TestPyPI
+        if: env.PUBLISH_MEMFABRIC == 'yes'
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.TESTPYPI_API_TOKEN }}
